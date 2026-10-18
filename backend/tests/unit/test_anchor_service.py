@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pypdfium2.raw as pdfium_c
 import pytest
 from pypdfium2 import PdfDocument
 
 from rag_anchor.services import PdfOpenError, search_anchors
 
 ABS = 0.05
+_LINE_BREAK_CODEPOINTS = frozenset({0x0A, 0x0D})
 
 
 def _raw_union(
@@ -27,6 +29,37 @@ def _raw_union(
             for index in range(char_start, char_start + char_count)
             if text[index] not in "\r\n"
         ]
+
+    return (
+        min(box[0] for box in boxes),
+        min(box[1] for box in boxes),
+        max(box[2] for box in boxes),
+        max(box[3] for box in boxes),
+    )
+
+
+def _pdfium_union(
+    path: Path,
+    page_index: int,
+    char_start: int,
+    char_count: int,
+) -> tuple[float, float, float, float]:
+    """Compute a union using PDFium indices only.
+
+    The regression guarded here is precisely the assumption that PDFium
+    character indices and Python ``str`` offsets are interchangeable, so this
+    helper must never index a Python string.
+    """
+    with PdfDocument(str(path)) as document:
+        text_page = document[page_index].get_textpage()
+        try:
+            boxes = [
+                text_page.get_charbox(index)
+                for index in range(char_start, char_start + char_count)
+                if pdfium_c.FPDFText_GetUnicode(text_page, index) not in _LINE_BREAK_CODEPOINTS
+            ]
+        finally:
+            text_page.close()
 
     return (
         min(box[0] for box in boxes),
@@ -252,3 +285,118 @@ def test_corrupted_pdf_raises_pdf_open_error(tmp_path: Path) -> None:
 
     with pytest.raises(PdfOpenError, match="Failed to open PDF"):
         search_anchors(broken, "anything")
+
+
+# --- Regression coverage A-F: PDFium character indices vs Python str offsets ---
+
+
+def test_regression_a_plain_ascii_single_and_multiple_hits(single_page_pdf: Path) -> None:
+    single = search_anchors(single_page_pdf, "fox")
+    assert len(single) == 1
+    assert single[0].char_start == 16
+    assert single[0].matched_text == "fox"
+    assert len(single[0].rects) == 1
+
+    multiple = search_anchors(single_page_pdf, "quick")
+    assert [hit.char_start for hit in multiple] == [4, 46, 52]
+    assert [hit.matched_text for hit in multiple] == ["quick", "quick", "quick"]
+    assert all(len(hit.rects) == 1 for hit in multiple)
+
+
+def test_regression_b_line_break_match_keeps_one_rect_per_line(pdf_factory) -> None:
+    path = pdf_factory(
+        "line_break.pdf",
+        [
+            [
+                (100.0, 200.0, "alpha beta"),
+                (100.0, 150.0, "gamma delta"),
+            ]
+        ],
+    )
+
+    hit = search_anchors(path, "beta gamma")[0]
+
+    assert hit.matched_text == "beta\r\ngamma"
+    assert hit.char_start == 6
+    assert hit.char_count == 11
+    assert len(hit.rects) == 2
+
+    upper, lower = hit.rects
+    assert upper.bottom > lower.top
+
+    expected_upper = _pdfium_union(path, hit.page_index, hit.char_start, 4)
+    expected_lower = _pdfium_union(path, hit.page_index, hit.char_start + 6, 5)
+    assert upper.as_tuple() == pytest.approx(expected_upper, abs=1e-6)
+    assert lower.as_tuple() == pytest.approx(expected_lower, abs=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "expected_start"),
+    [("accented_pdf", 5), ("cjk_pdf", 2)],
+)
+def test_regression_c_non_ascii_prefix_preserves_char_indices(
+    request: pytest.FixtureRequest,
+    fixture_name: str,
+    expected_start: int,
+) -> None:
+    path: Path = request.getfixturevalue(fixture_name)
+
+    hit = search_anchors(path, "quick")[0]
+
+    assert hit.char_start == expected_start
+    assert hit.char_count == 5
+    assert hit.matched_text == "quick"
+    assert len(hit.rects) == 1
+
+    expected = _pdfium_union(path, hit.page_index, hit.char_start, hit.char_count)
+    assert hit.rects[0].as_tuple() == pytest.approx(expected, abs=1e-6)
+
+
+def test_regression_d_non_bmp_prefix_hit_uses_pdfium_indices(non_bmp_pdf: Path) -> None:
+    with PdfDocument(str(non_bmp_pdf)) as document:
+        text_page = document[0].get_textpage()
+        try:
+            # The regression being guarded: PDFium keeps the non-BMP character
+            # in its character array, while get_text_range() drops it. Python
+            # offsets therefore must never be used as PDFium indices.
+            assert text_page.count_chars() == 6
+            assert len(text_page.get_text_range()) == 5
+        finally:
+            text_page.close()
+
+    hit = search_anchors(non_bmp_pdf, "quick")[0]
+
+    assert hit.char_start == 1
+    assert hit.char_count == 5
+    assert hit.matched_text == "quick"
+    expected = _pdfium_union(non_bmp_pdf, hit.page_index, hit.char_start, hit.char_count)
+    assert hit.rects[0].as_tuple() == pytest.approx(expected, abs=1e-6)
+
+
+def test_regression_d_unsupported_non_bmp_query_is_safe(non_bmp_pdf: Path) -> None:
+    # Supplementary-plane characters are outside the documented support range.
+    # The contract is a safe empty result, never an uncaught IndexError.
+    assert search_anchors(non_bmp_pdf, "\U0001d11e") == []
+    assert search_anchors(non_bmp_pdf, "\U0001d11equick") == []
+
+
+def test_regression_e_rotation_and_cropbox_keep_absolute_coordinates(pdf_factory) -> None:
+    path = pdf_factory(
+        "rotated_cropbox.pdf",
+        [[(100.0, 200.0, "The quick brown fox")]],
+        rotation=90,
+        cropbox=(50.0, 100.0, 400.0, 500.0),
+    )
+
+    hit = search_anchors(path, "quick")[0]
+
+    assert hit.page.rotation == 90
+    assert hit.page.cropbox == (50.0, 100.0, 400.0, 500.0)
+    assert hit.page.width_pt == 350.0
+    assert hit.page.height_pt == 400.0
+
+    rect = hit.rects[0]
+    assert rect.left == pytest.approx(124.432, abs=ABS)
+    assert rect.bottom == pytest.approx(197.528, abs=ABS)
+    assert rect.right == pytest.approx(152.032, abs=ABS)
+    assert rect.top == pytest.approx(208.616, abs=ABS)

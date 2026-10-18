@@ -5,11 +5,12 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import pypdfium2.raw as pdfium_c
 from pypdfium2 import PdfDocument, PdfiumError, PdfPage, PdfTextPage
 
 from rag_anchor.domain import AnchorHit, PageDescriptor, PdfRect
 
-_LINE_BREAKS = frozenset("\r\n")
+_LINE_BREAK_CODEPOINTS = frozenset({0x0A, 0x0D})
 
 
 class PdfAnchorError(RuntimeError):
@@ -119,7 +120,6 @@ def _search_page(
     query: str,
     match_case: bool,
 ) -> list[AnchorHit]:
-    text = text_page.get_text_range()
     cropbox_values = page.get_cropbox()
     cropbox: tuple[float, float, float, float] = (
         float(cropbox_values[0]),
@@ -150,7 +150,7 @@ def _search_page(
                     matched_text=text_page.get_text_range(char_start, char_count),
                     char_start=char_start,
                     char_count=char_count,
-                    rects=tuple(_match_rects(text_page, text, char_start, char_count)),
+                    rects=tuple(_match_rects(text_page, char_start, char_count)),
                     page=descriptor,
                 )
             )
@@ -162,11 +162,17 @@ def _search_page(
 
 def _match_rects(
     text_page: PdfTextPage,
-    text: str,
     char_start: int,
     char_count: int,
 ) -> list[PdfRect]:
-    """Build one absolute PDF user space rectangle per matched text line."""
+    """Build one absolute PDF user space rectangle per matched text line.
+
+    Both ``char_start`` and ``char_count`` are PDFium character indices, the
+    same index space used by ``get_charbox()``.  Line breaks are detected from
+    the PDFium character array rather than from a Python ``str`` slice:
+    ``get_text_range()`` is UCS-2 only and may drop or re-encode characters, so
+    Python string offsets must never be used as PDFium character indices.
+    """
     rects: list[PdfRect] = []
     line_rects: list[PdfRect] = []
 
@@ -184,7 +190,7 @@ def _match_rects(
         line_rects.clear()
 
     for index in range(char_start, char_start + char_count):
-        if text[index] in _LINE_BREAKS:
+        if pdfium_c.FPDFText_GetUnicode(text_page, index) in _LINE_BREAK_CODEPOINTS:
             flush_line()
             continue
 

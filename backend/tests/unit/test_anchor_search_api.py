@@ -335,3 +335,55 @@ def test_response_never_contains_server_paths(api, single_page_pdf: Path) -> Non
     assert str(api.settings.temp_dir) not in response.text
     assert str(api.settings.database_path) not in response.text
     assert "secret.pdf" not in response.text
+
+
+# --- Regression F: the search API must not answer 500 for Unicode prefixes ---
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "expected_start"),
+    [("accented_pdf", 5), ("cjk_pdf", 2)],
+)
+def test_search_non_ascii_prefix_returns_200(
+    api,
+    request: pytest.FixtureRequest,
+    fixture_name: str,
+    expected_start: int,
+) -> None:
+    path: Path = request.getfixturevalue(fixture_name)
+    document_id = _uploaded_id(api.client, path, f"{fixture_name}.pdf")
+
+    response = _search(api.client, document_id, "quick")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    hit = body["results"][0]
+    assert hit["char_start"] == expected_start
+    assert hit["char_count"] == 5
+    assert hit["matched_text"] == "quick"
+    assert len(hit["rects"]) == 1
+
+
+def test_search_non_bmp_document_returns_200_instead_of_500(api, non_bmp_pdf: Path) -> None:
+    document_id = _uploaded_id(api.client, non_bmp_pdf, "non_bmp.pdf")
+
+    response = _search(api.client, document_id, "quick")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    hit = body["results"][0]
+    assert hit["char_start"] == 1
+    assert hit["char_count"] == 5
+    assert hit["matched_text"] == "quick"
+
+
+def test_search_unsupported_non_bmp_query_returns_empty_results(api, non_bmp_pdf: Path) -> None:
+    document_id = _uploaded_id(api.client, non_bmp_pdf, "non_bmp.pdf")
+
+    response = _search(api.client, document_id, "\U0001d11e")
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 0
+    assert response.json()["results"] == []
