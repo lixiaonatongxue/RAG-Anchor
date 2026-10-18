@@ -1,0 +1,51 @@
+# ---- Python ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+wheels/
+
+# ---- 工具缓存 ----
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# ---- 环境变量与敏感信息 ----
+.env
+.env.*
+!.env.example
+
+# ---- Node / 前端 ----
+node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-error.log*
+
+# ---- 运行时数据（用户上传 PDF、派生文件） ----
+data/
+runtime/
+uploads/
+backend/uploads/
+backend/runtime/
+
+# ---- 日志与调试产物 ----
+*.log
+.snow/
+
+# ---- IDE / 系统 ----
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# ---- 说明 ----
+# uv.lock 必须提交，不要加入忽略列表。
