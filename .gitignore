@@ -34,6 +34,15 @@ runtime/
 uploads/
 backend/uploads/
 backend/runtime/
+backend/.data/
+.data/
+
+# ---- M0-04A SQLite 与临时上传文件 ----
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.upload
+*.tmp
 
 # ---- 日志与调试产物 ----
 *.log
