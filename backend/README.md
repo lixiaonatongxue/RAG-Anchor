@@ -1,6 +1,6 @@
 # RAG-AnchorLab Backend
 
-独立 uv 项目（Python 3.11），FastAPI 后端。当前提供健康检查、PDF 文档管理与证据搜索接口。
+独立 uv 项目（Python 3.11），FastAPI 后端。当前提供健康检查、PDF 文档管理、证据搜索与 PDF 文件读取接口。
 
 ## 命令
 
@@ -35,6 +35,7 @@ uv lock --check
 | GET    | `/api/v1/documents/{document_id}`                | 查询单个文档元数据                          |
 | DELETE | `/api/v1/documents/{document_id}`                | 删除文档元数据与存储文件                    |
 | POST   | `/api/v1/documents/{document_id}/anchors/search` | 检索证据文字并返回全部命中位置              |
+| GET    | `/api/v1/documents/{document_id}/file`           | 读取已上传 PDF 原始字节（inline）           |
 
 ### 证据搜索
 
@@ -89,6 +90,31 @@ Content-Type: application/json
 - `rects`：每个匹配文本行一个矩形；跨行命中保留多行矩形，不返回跨行大框。
 - `bbox`：所有行矩形的派生外包框，不能替代 `rects`。
 - 零命中返回 HTTP 200，`total` 为 `0`，`results` 为 `[]`。
+
+### 文件读取
+
+```http
+GET /api/v1/documents/{document_id}/file
+```
+
+成功响应直接返回已上传 PDF 的原始字节：
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/pdf
+Content-Disposition: inline; filename="document.pdf"
+```
+
+- 路径只由服务端根据 UUID 与存储目录生成，客户端不能传入磁盘路径。
+- 文件名固定为 `document.pdf`，不使用上传时的原始文件名。
+- 使用 `FileResponse` 流式返回，不会删除、修改或重新登记文档。
+- 前端可用该接口把 PDF 交给 PDF.js 加载，再做坐标高亮。
+
+示例：
+
+```bash
+curl -OJ http://127.0.0.1:8000/api/v1/documents/<document_id>/file
+```
 
 ### 错误状态码
 

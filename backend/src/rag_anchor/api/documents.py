@@ -6,6 +6,7 @@ from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 
 from rag_anchor.api.schemas import (
     AnchorHitResponse,
@@ -24,6 +25,9 @@ from rag_anchor.services.document_service import (
 )
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+_SAFE_DOWNLOAD_FILENAME = "document.pdf"
+"""Fixed Content-Disposition filename; the client's original name is never used."""
 
 
 def get_document_service(request: Request) -> DocumentService:
@@ -126,4 +130,39 @@ def search_document_anchors(
         match_case=payload.match_case,
         total=len(results),
         results=results,
+    )
+
+
+@router.get(
+    "/{document_id}/file",
+    response_class=FileResponse,
+    responses={
+        200: {"content": {"application/pdf": {}}},
+        404: {"description": "Document metadata not found"},
+        500: {"description": "Stored PDF is missing or unreadable"},
+    },
+)
+def get_document_file(document_id: UUID, service: ServiceDep) -> FileResponse:
+    """Return the stored PDF bytes for inline browser display.
+
+    The path is always derived from the UUID by the service, never from a
+    client-supplied filename. Missing metadata is a 404; a missing or
+    unreadable on-disk file is a generic 500 that never reveals the path.
+    """
+    try:
+        pdf_path = service.get_document_path(document_id)
+    except DocumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Document not found") from exc
+
+    if not pdf_path.is_file():
+        raise HTTPException(
+            status_code=500,
+            detail="Stored PDF is missing or unreadable",
+        )
+
+    return FileResponse(
+        path=pdf_path,
+        media_type="application/pdf",
+        filename=_SAFE_DOWNLOAD_FILENAME,
+        content_disposition_type="inline",
     )

@@ -28,12 +28,12 @@ PDF + query
 
 独立 uv 项目，FastAPI 应用。当前分层：
 
-| 层          | 职责                                                             | 当前状态                                                       |
-| ----------- | ---------------------------------------------------------------- | -------------------------------------------------------------- |
-| `api/`      | HTTP 路由、请求/响应模型                                         | health、文档管理（M0-04A）、证据搜索（M0-04B）                 |
-| `domain/`   | 与框架无关的领域模型（`AnchorHit`、`PdfRect`、`PageDescriptor`） | M0-03 已实现 `PdfRect` / `AnchorHit` / `PageDescriptor`        |
-| `services/` | PDF 解析、文本检索、文档管理                                     | M0-03 已实现 `search_anchors`；M0-04A 已实现 `DocumentService` |
-| `infra/`    | 本地文件存储、SQLite 元数据仓储                                  | M0-04A 已实现 `DocumentRepository`                             |
+| 层          | 职责                                                             | 当前状态                                                           |
+| ----------- | ---------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `api/`      | HTTP 路由、请求/响应模型                                         | health、文档管理（M0-04A）、证据搜索（M0-04B）、文件读取（M0-05A） |
+| `domain/`   | 与框架无关的领域模型（`AnchorHit`、`PdfRect`、`PageDescriptor`） | M0-03 已实现 `PdfRect` / `AnchorHit` / `PageDescriptor`            |
+| `services/` | PDF 解析、文本检索、文档管理                                     | M0-03 已实现 `search_anchors`；M0-04A 已实现 `DocumentService`     |
+| `infra/`    | 本地文件存储、SQLite 元数据仓储                                  | M0-04A 已实现 `DocumentRepository`                                 |
 
 运行时配置位于 `rag_anchor/config.py`（读取 `RAG_ANCHOR_DATA_DIR` 与 `RAG_ANCHOR_MAX_UPLOAD_BYTES`）。
 
@@ -59,16 +59,17 @@ def search_anchors(
 - `rects` 为逐行矩形，跨行命中保留多行矩形，不生成跨行大框。
 - 所有矩形均为 PDF user space 绝对坐标（points）。
 
-### 2.3 HTTP 接口（M0-04A / M0-04B）
+### 2.3 HTTP 接口（M0-04A / M0-04B / M0-05A）
 
-| 方法   | 路径                                             | 说明                           |
-| ------ | ------------------------------------------------ | ------------------------------ |
-| GET    | `/api/v1/health`                                 | 健康检查                       |
-| POST   | `/api/v1/documents`                              | 上传 PDF（multipart `file`）   |
-| GET    | `/api/v1/documents`                              | 分页列出文档                   |
-| GET    | `/api/v1/documents/{document_id}`                | 查询单个文档元数据             |
-| DELETE | `/api/v1/documents/{document_id}`                | 删除文档元数据与存储文件       |
-| POST   | `/api/v1/documents/{document_id}/anchors/search` | 检索证据文字并返回全部命中位置 |
+| 方法   | 路径                                             | 说明                                |
+| ------ | ------------------------------------------------ | ----------------------------------- |
+| GET    | `/api/v1/health`                                 | 健康检查                            |
+| POST   | `/api/v1/documents`                              | 上传 PDF（multipart `file`）        |
+| GET    | `/api/v1/documents`                              | 分页列出文档                        |
+| GET    | `/api/v1/documents/{document_id}`                | 查询单个文档元数据                  |
+| DELETE | `/api/v1/documents/{document_id}`                | 删除文档元数据与存储文件            |
+| POST   | `/api/v1/documents/{document_id}/anchors/search` | 检索证据文字并返回全部命中位置      |
+| GET    | `/api/v1/documents/{document_id}/file`           | 读取已上传 PDF 原始字节（内联展示） |
 
 搜索请求：
 
@@ -128,7 +129,27 @@ def search_anchors(
 
 搜索路由是普通同步 `def`，由 FastAPI 线程池执行阻塞的 PDFium 解析，不阻塞事件循环。
 
-### 2.4 前端（后续阶段）
+### 2.4 文件读取（M0-05A）
+
+```http
+GET /api/v1/documents/{document_id}/file
+```
+
+返回已上传 PDF 的原始字节，供浏览器或 PDF.js 直接加载。实现复用 `DocumentService.get_document_path()`：路径始终由服务端 UUID 派生，客户端不能提交磁盘路径，也不能通过文件名选择文件。
+
+响应头：
+
+```http
+Content-Type: application/pdf
+Content-Disposition: inline; filename="document.pdf"
+```
+
+- `Content-Disposition` 固定为 `inline`，文件名固定为 `document.pdf`，不使用用户上传时的原始文件名。
+- 使用 Starlette/FastAPI `FileResponse` 流式发送文件，不引入额外依赖。
+- 读取是只读操作：不删除、不修改、不重新登记文档元数据。
+- 错误语义：元数据不存在 → 404；非法 UUID → 422；元数据存在但文件缺失或不可读 → 500，且不泄露服务器路径。
+
+### 2.5 前端（后续阶段）
 
 - React + TypeScript + Vite + PDF.js。
 - PDF.js 负责 PDF 用户空间 → 画布像素的变换。
@@ -176,4 +197,5 @@ backend/.data/                 # 可由 RAG_ANCHOR_DATA_DIR 覆盖
 | M0-03.1 | 坐标契约一致性审查与修正（已完成）                                            |
 | M0-04A  | PDF 上传与文档管理 API（已完成）                                              |
 | M0-04B  | 证据搜索 API：`POST /documents/{id}/anchors/search`（已完成）                 |
+| M0-05A  | PDF 文件读取 API：`GET /documents/{id}/file`（已完成）                        |
 | M0-05   | 前端 PDF.js 渲染与高亮（未开始）                                              |
