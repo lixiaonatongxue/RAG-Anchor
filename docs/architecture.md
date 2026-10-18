@@ -19,7 +19,7 @@ PDF + query
 [几何输出] page_index / quads / bbox / page_descriptor
     │
     ▼
-[前端渲染] PDF.js 渲染页面 → 归一化坐标 → 绝对定位高亮
+[前端渲染] PDF.js 渲染页面 → viewport 变换 PDF user space 坐标 → 绝对定位高亮
 ```
 
 ## 2. 组件边界
@@ -28,12 +28,12 @@ PDF + query
 
 独立 uv 项目，FastAPI 应用。规划中的分层：
 
-| 层          | 职责                                                          | 当前状态              |
-| ----------- | ------------------------------------------------------------- | --------------------- |
-| `api/`      | HTTP 路由、请求/响应模型                                      | 仅有 `/api/v1/health` |
-| `domain/`   | 与框架无关的领域模型（`AnchorHit`、`Quad`、`PageDescriptor`） | 尚未实现              |
-| `services/` | PDF 解析、文本检索、坐标变换                                  | 尚未实现              |
-| `infra/`    | 本地文件存储、配置                                            | 尚未实现              |
+| 层          | 职责                                                          | 当前状态                                                |
+| ----------- | ------------------------------------------------------------- | ------------------------------------------------------- |
+| `api/`      | HTTP 路由、请求/响应模型                                      | 仅有 `/api/v1/health`                                   |
+| `domain/`   | 与框架无关的领域模型（`AnchorHit`、`Quad`、`PageDescriptor`） | M0-03 已实现 `PdfRect` / `AnchorHit` / `PageDescriptor` |
+| `services/` | PDF 解析、文本检索、坐标变换                                  | M0-03 已实现 `search_anchors`                           |
+| `infra/`    | 本地文件存储、配置                                            | 尚未实现                                                |
 
 依赖方向：`api → services → domain`，`infra` 只被 `services` 依赖。领域层不得 import FastAPI。
 
@@ -58,7 +58,7 @@ def search_anchors(
 
 - React + TypeScript + Vite + PDF.js。
 - PDF.js 负责 PDF 用户空间 → 画布像素的变换。
-- 前端只消费归一化坐标，用 CSS 百分比定位高亮层。
+- 前端消费后端返回的 PDF user space 绝对坐标；如需 CSS 百分比，由前端派生归一化坐标。
 - 缩放、翻页、旋转不改变已保存的几何数据。
 
 ## 3. 坐标与数据契约

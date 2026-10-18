@@ -1,6 +1,6 @@
 # ADR-0001：坐标契约
 
-- 状态：Accepted；M0-02 已用 `pypdfium2 5.14.0` 验证基础语义，生产适配器尚未实现
+- 状态：Accepted；M0-02 已验证基础语义，M0-03.1 已统一生产适配器为 PDF user space 原始坐标
 - 日期：2026-10-18
 - 决策范围：PDF 几何数据的权威表示、派生表示与前端渲染职责
 
@@ -27,7 +27,7 @@ M0-02 实测（`pypdfium2 5.14.0`）表明这两点在 PDFium API 上都不成�
 - reportlab 以基线 `(100, 200)` 绘制 12 pt 文本时，`get_charbox()` 返回 `(100.168, 200.0, 107.164, 208.616)`。`bottom == 200` 且 `top > bottom`，证明原点在左下、y 向上。
 - CropBox 设为 `(50, 100, 400, 500)` 后，`get_charbox()` 仍返回绝对 user space 坐标（`quick` 左边界约 `124.432`），并未自动扣除 CropBox 原点。
 
-因此本 ADR 以 PDF user space 原始矩形为权威表示，并规定适配层显式做 CropBox 相对转换。这不是实现细节，而是对原契约的更正；证据固化为 `backend/tests/unit/test_geometry.py` 中的测试。
+因此本 ADR 以 PDF user space 原始矩形为权威表示。生产适配层直接输出 `get_charbox()` 的绝对坐标，**不**在服务内扣除 CropBox 原点；CropBox 仅作为页面元数据随结果返回，归一化等变换属于派生表示。这是对原契约的更正；证据固化为 `backend/tests/unit/test_geometry.py` 与 `backend/tests/unit/test_anchor_service.py`。
 
 ## 决策
 
@@ -37,11 +37,10 @@ M0-02 实测（`pypdfium2 5.14.0`）表明这两点在 PDFium API 上都不成�
 
 - 单位：PDF points（1 pt = 1/72 inch），浮点数。
 - 原点与轴向：**页面左下角为原点，x 向右，y 向上**。这是 PDF user space 的定义，已由 M0-02 实测确认（见下文“已验证行为”）。
-- 页面空间以该页 `/CropBox` 为边界。`pypdfium2` 的 `get_charbox()` 返回的是**未扣除 CropBox 原点的绝对 user space 坐标**；适配层必须做唯一一次显式转换：
+- 页面边界由该页 `/CropBox` 描述，但 `PdfRect` 不相对 CropBox 存储。`pypdfium2` 的 `get_charbox()` 返回**未扣除 CropBox 原点的绝对 user space 坐标**，生产适配层必须保持该值原样，**不得**在 `search_anchors()` 内执行 `x - cropbox.left` / `y - cropbox.bottom`。CropBox 原点保存在 `PageDescriptor.cropbox`，供前端或派生归一化使用。
 
 ```text
-x_rel = x_abs - cropbox.left
-y_rel = y_abs - cropbox.bottom
+PdfRect = get_charbox()  # 绝对 user space，不做 CropBox 平移
 ```
 
 - 旋转：`get_charbox()` 返回**未旋转** user space 坐标；`/Rotate` 不烘焙进字符矩形。页面旋转角、CropBox、页面尺寸作为 `PageDescriptor` 随结果返回。
@@ -58,7 +57,7 @@ PageDescriptor
 - width_pt: float          # CropBox 宽度：cropbox.right - cropbox.left
 - height_pt: float         # CropBox 高度：cropbox.top - cropbox.bottom
 - rotation: int            # 顺时针角度：0 / 90 / 180 / 270
-- cropbox: [left, bottom, right, top]  # PDF user space points
+- cropbox: [left, bottom, right, top]  # PDF user space points 中的绝对边界
 ```
 
 约束：
@@ -77,14 +76,14 @@ PageDescriptor
 
 ### 4. 归一化坐标：仅派生表示
 
-为便于前端定位，可额外输出归一化矩形：
+为便于前端定位，可额外输出归一化矩形（派生表示，不是后端权威输出）：
 
 ```text
-x_norm = x_pt / page_width_pt
-y_norm = y_pt / page_height_pt
+x_norm = (x_abs - cropbox.left) / page_width_pt
+y_norm = (y_abs - cropbox.bottom) / page_height_pt
 ```
 
-其中 `x_pt` / `y_pt` 是已转换为 **CropBox 相对、左下原点、y 向上**的坐标，`page_width_pt` / `page_height_pt` 是未旋转 CropBox 尺寸。
+其中 `x_abs` / `y_abs` 是 `PdfRect` 的绝对 user space 坐标，`page_width_pt` / `page_height_pt` 是未旋转 CropBox 尺寸。归一化只在需要时派生，不得改变 `PdfRect` 的绝对坐标语义。
 
 约束：
 
@@ -131,24 +130,24 @@ y_norm = y_pt / page_height_pt
 | 字符坐标原点         | reportlab 基线 `(100, 200)`、12 pt 的 `T` 返回 `(100.168, 200.0, 107.164, 208.616)`，即左下原点、y 向上                  | `test_charbox_uses_pdf_user_space_with_lower_left_origin`              |
 | 字符矩形合并         | `The` 三个字符合并为 `(100.168, 199.832, 120.196, 208.616)`                                                              | `test_merging_character_boxes_yields_word_bounding_box`                |
 | CropBox 与尺寸       | CropBox `(50, 100, 400, 500)` 时 `get_size() == (350, 400)`                                                              | `test_cropbox_sets_page_size_but_charbox_stays_absolute`               |
-| CropBox 与字符坐标   | `get_charbox()` 仍返回绝对 user space（`quick` 左边界约 `124.432`），不自动扣除 `(50, 100)`；显式扣除后左边界约 `74.432` | 同上                                                                   |
+| CropBox 与字符坐标   | `get_charbox()` 仍返回绝对 user space（`quick` 左边界约 `124.432`），不自动扣除 `(50, 100)`；显式扣除后左边界约 `74.432`（仅为 M0-02 引擎行为记录；生产适配器不执行该扣除） | 同上                                                                   |
 | `/Rotate 90/180/270` | `get_rotation()` 返回精确角度；`get_size()` 返回旋转后尺寸；`get_charbox()` 与未旋转页面完全一致                         | `test_rotation_is_reported_without_rotating_charboxes`                 |
 | Rotate + CropBox     | CropBox 350×400、`/Rotate 90` 时 `get_size() == (400, 350)`                                                              | `test_rotation_and_cropbox_combine_in_reported_page_size`              |
 | 字符计数             | 样例中 `count_chars() == len(get_text_range())`                                                                          | `test_character_count_matches_extracted_text`                          |
 
-这些测试只固化 M0-02 观察到的事实，不代表生产 `search_anchors()` 已实现。
+这些测试只固化 M0-02 观察到的事实。生产 `search_anchors()` 已在 M0-03 基于这些事实实现，M0-03.1 将其坐标输出统一为绝对 user space。
 
 ## 未确定 / 未承诺
 
 1. **任意旋转文字的精确四边形**：尚未用文字自身旋转（文本矩阵/`drawRotatedString` 等）的样例验证。MVP 不承诺该场景的 quad 精度。
-2. **跨行命中的 quad 拆分规则**：当前只知道可以对每个字符调用 `get_charbox()` 并按行合并；按行分组的判定规则尚未实现与测试。
+2. **跨行命中的拆分规则**：M0-03 已按 `\r\n` 拆分并输出每行一个轴对齐 `PdfRect`；quads（倾斜文字）与更细的空格/软换行规则仍未确定。
 3. **空白归一化**：`search("gamma second")` 可以跨 `\r\n` 命中，但多空格、制表符、软换行、连字符断词的行为未系统验证。`match_mode` 的 `exact` / `casefold` / 后续扩展尚未定稿。
 4. **阅读顺序**：尚未实现同页命中排序；旋转页面的文本提取顺序可能变化，不能直接复用。
 5. **CropBox 外字符**：尚未验证是否应过滤 CropBox 之外的文本命中。
 6. **CropBox 继承**：`pypdfium2` 文档指出 `get_*box()`（除 `get_bbox()`）在 PDFium 5418 中不继承父节点；本阶段只测试了页级 CropBox。
 7. **Unicode 覆盖**：`get_text_range()` 文档警告仅支持 UCS-2；CJK、RTL、连字、组合字符、U+10000 以上字符尚未验证。`get_text_bounded()` 提供完整 Unicode 支持，但未用于本阶段。
 8. **搜索重叠**：默认 `consecutive=False` 会跳过重叠匹配；`consecutive=True` 仅确认 API 存在，未纳入契约。
-9. **前端端到端**：PDF.js `viewport` 与后端 CropBox 相对坐标的联调尚未进行。
+9. **前端端到端**：PDF.js `viewport` 与后端 PDF user space 绝对坐标的联调尚未进行。
 10. **加密 PDF、扫描件、XFA、OCR**：均未验证，且不属于当前阶段范围。
 
 ## 第三方许可记录
@@ -170,7 +169,7 @@ y_norm = y_pt / page_height_pt
 
 ## 示例（示意，非最终 schema）
 
-坐标值为 CropBox 相对、左下原点、y 向上的 PDF points；`bbox` / `quads` 为派生展示值。
+坐标值为 PDF user space 绝对坐标、左下原点、y 向上的 PDF points；前端可按需派生 CropBox 相对或归一化坐标；`bbox` / `quads` 为派生展示值。
 
 ```json
 {
@@ -213,13 +212,13 @@ y_norm = y_pt / page_height_pt
 代价：
 
 - 响应体比单一 bbox 略大。
-- 适配层必须显式做“绝对 user space → CropBox 相对 space”的转换，且只能做一次。
+- 调用方若需要 CropBox 相对坐标，必须自行显式派生，且只能做一次；后端不隐式平移。
 - `width_pt` / `height_pt` 与显示尺寸分离，前端需理解二者差异。
 - 旋转文字、Unicode、阅读顺序等场景仍需后续验证，当前不能对外宣称完全支持。
 
 ## 待办
 
-1. 实现生产适配器：`get_charbox()` → CropBox 相对坐标，并保证只转换一次。
+1. 生产适配器已实现：`get_charbox()` 的绝对 user space 坐标原样输出（M0-03 / M0-03.1），不做 CropBox 平移。
 2. 定义跨行命中的 quad 分组规则并补测试。
 3. 确定 `match_mode` 枚举与空白归一化规则。
 4. 实现同页阅读顺序排序，并验证 `/Rotate` 页面。
