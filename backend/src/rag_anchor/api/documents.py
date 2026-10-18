@@ -7,7 +7,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 
-from rag_anchor.api.schemas import DocumentListResponse, DocumentResponse
+from rag_anchor.api.schemas import (
+    AnchorHitResponse,
+    AnchorSearchRequest,
+    AnchorSearchResponse,
+    DocumentListResponse,
+    DocumentResponse,
+)
+from rag_anchor.services.anchor_service import PdfAnchorError, search_anchors
 from rag_anchor.services.document_service import (
     DocumentNotFoundError,
     DocumentPersistenceError,
@@ -76,3 +83,47 @@ def delete_document(document_id: UUID, service: ServiceDep) -> None:
         service.delete_document(document_id)
     except DocumentNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Document not found") from exc
+
+
+@router.post("/{document_id}/anchors/search", response_model=AnchorSearchResponse)
+def search_document_anchors(
+    document_id: UUID,
+    payload: AnchorSearchRequest,
+    service: ServiceDep,
+) -> AnchorSearchResponse:
+    """Return every occurrence of the query in a stored PDF.
+
+    This route is intentionally synchronous so FastAPI runs the blocking
+    PDFium work in its worker thread pool instead of the event loop.
+    """
+    try:
+        pdf_path = service.get_document_path(document_id)
+    except DocumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Document not found") from exc
+
+    try:
+        hits = search_anchors(pdf_path, payload.query, match_case=payload.match_case)
+    except OSError as exc:
+        # FileNotFoundError / IsADirectoryError / permission errors. The
+        # original message contains the absolute path and must not leak.
+        raise HTTPException(
+            status_code=500,
+            detail="Stored PDF is missing or unreadable",
+        ) from exc
+    except PdfAnchorError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored PDF could not be searched",
+        ) from exc
+    except ValueError as exc:
+        # Defensive: the request model normally rejects an empty query first.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    results = [AnchorHitResponse.model_validate(hit) for hit in hits]
+    return AnchorSearchResponse(
+        document_id=document_id,
+        query=payload.query,
+        match_case=payload.match_case,
+        total=len(results),
+        results=results,
+    )

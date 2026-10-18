@@ -142,6 +142,17 @@ class DocumentService:
         """Return one document's metadata or ``None``."""
         return self._repository.get(document_id)
 
+    def get_document_path(self, document_id: UUID) -> Path:
+        """Return the server-managed PDF path for a known document.
+
+        The path is always derived from the UUID, never from client-supplied
+        filenames. A missing metadata row raises ``DocumentNotFoundError``;
+        the caller decides how to report a missing or unreadable file.
+        """
+        if self._repository.get(document_id) is None:
+            raise DocumentNotFoundError("Document not found")
+        return self._settings.documents_dir / f"{document_id}.pdf"
+
     def delete_document(self, document_id: UUID) -> None:
         """Delete metadata and the stored PDF.
 
