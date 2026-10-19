@@ -30,6 +30,7 @@ yarn-error.log*
 
 # ---- 运行时数据（用户上传 PDF、派生文件） ----
 data/
+backend/.benchmark-data/
 runtime/
 uploads/
 backend/uploads/

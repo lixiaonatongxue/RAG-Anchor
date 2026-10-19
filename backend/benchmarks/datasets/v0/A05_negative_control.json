@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "A05",
+  "scenario": "A",
+  "title": "negative control with no occurrence",
+  "evaluation": "direct",
+  "truth_level": "detection-only",
+  "page_size": [612.0, 792.0],
+  "rotation": 0,
+  "cropbox": null,
+  "pages": [
+    {
+      "lines": [
+        {
+          "baseline_y": 200.0,
+          "segments": [
+            {"x": 100.0, "text": "The ", "font": "Helvetica", "size": 12.0},
+            {"x": 124.012, "text": "zephyr", "font": "Helvetica", "size": 12.0},
+            {"x": 160.024, "text": " is here.", "font": "Helvetica", "size": 12.0}
+          ]
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "text": "zzzznotfound",
+      "match_case": true,
+      "expected": []
+    }
+  ],
+  "match_radius_pt": 12.0,
+  "min_separation_pt": 24.0
+}

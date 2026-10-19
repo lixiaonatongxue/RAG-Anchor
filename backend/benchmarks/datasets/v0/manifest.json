@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "v0",
+  "description": "M0-06B1 minimal deterministic anchoring benchmark (5 samples).",
+  "samples": [
+    "A01_single_hit.json",
+    "H01_same_page_repeats.json",
+    "C01_cross_line.json",
+    "B02_accented_prefix.json",
+    "A05_negative_control.json"
+  ]
+}
