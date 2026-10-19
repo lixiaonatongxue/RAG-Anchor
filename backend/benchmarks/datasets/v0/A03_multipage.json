@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "id": "A03",
+  "scenario": "A",
+  "title": "three pages with one hit per page",
+  "evaluation": "direct",
+  "truth_level": "layout-exact",
+  "page_size": [612.0, 792.0],
+  "rotation": 0,
+  "cropbox": null,
+  "pages": [
+    {
+      "lines": [
+        {
+          "baseline_y": 200.0,
+          "segments": [
+            {"x": 100.0, "text": "The ", "font": "Helvetica", "size": 12.0},
+            {"x": 124.012, "text": "narwhal", "font": "Helvetica", "size": 12.0},
+            {"x": 166.024, "text": " is here.", "font": "Helvetica", "size": 12.0}
+          ]
+        }
+      ]
+    },
+    {
+      "lines": [
+        {
+          "baseline_y": 200.0,
+          "segments": [
+            {"x": 100.0, "text": "The ", "font": "Helvetica", "size": 12.0},
+            {"x": 124.012, "text": "narwhal", "font": "Helvetica", "size": 12.0},
+            {"x": 166.024, "text": " is here.", "font": "Helvetica", "size": 12.0}
+          ]
+        }
+      ]
+    },
+    {
+      "lines": [
+        {
+          "baseline_y": 200.0,
+          "segments": [
+            {"x": 100.0, "text": "The ", "font": "Helvetica", "size": 12.0},
+            {"x": 124.012, "text": "narwhal", "font": "Helvetica", "size": 12.0},
+            {"x": 166.024, "text": " is here.", "font": "Helvetica", "size": 12.0}
+          ]
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "text": "narwhal",
+      "match_case": true,
+      "expected": [
+        {
+          "page_index": 0,
+          "parts": [
+            {"line_index": 0, "segment_index": 1, "char_offset": 0, "char_length": 7}
+          ]
+        },
+        {
+          "page_index": 1,
+          "parts": [
+            {"line_index": 0, "segment_index": 1, "char_offset": 0, "char_length": 7}
+          ]
+        },
+        {
+          "page_index": 2,
+          "parts": [
+            {"line_index": 0, "segment_index": 1, "char_offset": 0, "char_length": 7}
+          ]
+        }
+      ]
+    }
+  ],
+  "match_radius_pt": 12.0,
+  "min_separation_pt": 24.0
+}

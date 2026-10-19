@@ -100,7 +100,7 @@ def test_dataset_section_matches_manifest(built: dict[str, Any], dataset) -> Non
     section = built["dataset"]
 
     assert section["name"] == "v0"
-    assert section["sample_count"] == len(specs) == 5
+    assert section["sample_count"] == len(specs) == 12
     assert re.fullmatch(r"[0-9a-f]{64}", section["dataset_sha256"])
     assert section["evaluation_split"] == {
         "direct": [spec["id"] for spec in specs],
@@ -112,10 +112,10 @@ def test_dataset_section_matches_manifest(built: dict[str, Any], dataset) -> Non
 def test_summary_reports_perfect_real_metrics(built: dict[str, Any]) -> None:
     summary = built["summary"]
 
-    assert summary["quality_sample_count"] == 5
+    assert summary["quality_sample_count"] == 12
     assert summary["excluded_sample_count"] == 0
-    assert summary["query_count"] == 5
-    assert summary["detection"]["tp"] == 5
+    assert summary["query_count"] == 12
+    assert summary["detection"]["tp"] == 14
     assert summary["detection"]["fp"] == 0
     assert summary["detection"]["fn"] == 0
     assert summary["detection"]["precision"] == 1.0
@@ -123,7 +123,7 @@ def test_summary_reports_perfect_real_metrics(built: dict[str, Any]) -> None:
     assert summary["detection"]["f1"] == 1.0
     assert summary["detection"]["count_match_rate"] == 1.0
     assert summary["page"]["page_count_exact_rate"] == 1.0
-    assert summary["geometry"]["occurrence"]["center_error_pt"]["count"] == 5
+    assert summary["geometry"]["occurrence"]["center_error_pt"]["count"] == 14
     assert summary["multiline"]["rect_count_exact_rate"] == 1.0
 
 
@@ -172,7 +172,7 @@ def test_report_is_json_serializable_without_nan_or_infinity(
 
     assert "NaN" not in text
     assert "Infinity" not in text
-    assert '"quality_sample_count": 5' in text
+    assert '"quality_sample_count": 12' in text
 
 
 def test_report_contains_no_local_absolute_paths(built: dict[str, Any]) -> None:
@@ -236,5 +236,5 @@ def test_invalid_fixture_is_split_into_its_own_section(dataset) -> None:
     assert built["failures"]["counts"] == {"F10_INVALID_FIXTURE": 1}
     assert len(built["failures"]["invalid_fixtures"]) == 1
     assert built["failures"]["invalid_fixtures"][0]["sample_id"] == "A01"
-    assert built["summary"]["quality_sample_count"] == 4
+    assert built["summary"]["quality_sample_count"] == 11
     assert built["summary"]["excluded_sample_count"] == 1

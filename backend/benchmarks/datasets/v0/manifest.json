@@ -1,12 +1,19 @@
 {
   "schema_version": 1,
   "name": "v0",
-  "description": "M0-06B1 minimal deterministic anchoring benchmark (5 samples).",
+  "description": "M0-06B2-1 deterministic anchoring benchmark (12 samples).",
   "samples": [
     "A01_single_hit.json",
     "H01_same_page_repeats.json",
     "C01_cross_line.json",
     "B02_accented_prefix.json",
-    "A05_negative_control.json"
+    "A05_negative_control.json",
+    "E01_cropbox_absolute.json",
+    "E02_cropbox_cross_line.json",
+    "F01_rotate_90.json",
+    "F02_rotate_180.json",
+    "F03_rotate_270.json",
+    "A03_multipage.json",
+    "F04_rotate_90_cropbox.json"
   ]
 }

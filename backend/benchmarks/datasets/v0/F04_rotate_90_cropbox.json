@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "id": "F04",
+  "scenario": "F",
+  "title": "page rotated by 90 degrees with non-default CropBox keeps absolute unrotated coordinates",
+  "evaluation": "direct",
+  "truth_level": "layout-exact",
+  "page_size": [612.0, 792.0],
+  "rotation": 90,
+  "cropbox": [50.0, 100.0, 400.0, 500.0],
+  "pages": [
+    {
+      "lines": [
+        {
+          "baseline_y": 200.0,
+          "segments": [
+            {"x": 100.0, "text": "The ", "font": "Helvetica", "size": 12.0},
+            {"x": 124.012, "text": "zephyr", "font": "Helvetica", "size": 12.0},
+            {"x": 160.024, "text": " is here.", "font": "Helvetica", "size": 12.0}
+          ]
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "text": "zephyr",
+      "match_case": true,
+      "expected": [
+        {
+          "page_index": 0,
+          "parts": [
+            {"line_index": 0, "segment_index": 1, "char_offset": 0, "char_length": 6}
+          ]
+        }
+      ]
+    }
+  ],
+  "match_radius_pt": 12.0,
+  "min_separation_pt": 24.0
+}

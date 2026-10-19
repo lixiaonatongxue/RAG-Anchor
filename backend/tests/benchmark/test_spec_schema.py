@@ -40,16 +40,29 @@ def _mutated(specs: list[dict[str, Any]], sample_id: str = "A01") -> dict[str, A
     raise AssertionError(f"missing sample {sample_id}")
 
 
-def test_manifest_lists_five_unique_samples() -> None:
+def test_manifest_lists_unique_samples() -> None:
     manifest = truth.load_manifest(DATASET_DIR)
     assert manifest["schema_version"] == 1
     assert manifest["name"] == "v0"
-    assert len(manifest["samples"]) == 5
-    assert len(set(manifest["samples"])) == 5
+    assert len(manifest["samples"]) == 12
+    assert len(set(manifest["samples"])) == 12
 
 
 def test_dataset_loads_expected_samples(specs: list[dict[str, Any]]) -> None:
-    assert [spec["id"] for spec in specs] == ["A01", "H01", "C01", "B02", "A05"]
+    assert [spec["id"] for spec in specs] == [
+        "A01",
+        "H01",
+        "C01",
+        "B02",
+        "A05",
+        "E01",
+        "E02",
+        "F01",
+        "F02",
+        "F03",
+        "A03",
+        "F04",
+    ]
     assert len({spec["id"] for spec in specs}) == len(specs)
 
 
