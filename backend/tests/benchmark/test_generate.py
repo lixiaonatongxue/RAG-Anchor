@@ -29,7 +29,7 @@ def generated(specs, tmp_path_factory):
 
 
 def test_every_fixture_passes_preflight(generated) -> None:
-    assert len(generated) == 18
+    assert len(generated) == 22
     for spec, path in generated:
         assert path.name == f"{spec['id']}.pdf"
         assert path.read_bytes().startswith(b"%PDF-")

@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from bench_helpers import DATASET_DIR
-from benchmarks import generate, match, runner, truth
+from benchmarks import generate, match, metrics, runner, truth
 from pypdf import PdfReader
 
 from rag_anchor.services import search_anchors
@@ -27,10 +27,15 @@ NEW_SAMPLE_IDS = (
     "C03",
     "B03",
     "B04",
+    "A02",
+    "A04",
+    "H02",
+    "H04",
 )
-# B03/B04 are the non-BMP boundary/unsupported samples; they must not be
-# gated by the direct-quality detection and matching assertions.
-BOUNDARY_SAMPLE_IDS = ("B03", "B04")
+# B03/B04 are the non-BMP boundary/unsupported samples and H04 is the
+# overlapping-substring boundary sample; they must not be gated by the
+# direct-quality detection and matching assertions.
+BOUNDARY_SAMPLE_IDS = ("B03", "B04", "H04")
 DIRECT_NEW_SAMPLE_IDS = tuple(
     sample_id for sample_id in NEW_SAMPLE_IDS if sample_id not in BOUNDARY_SAMPLE_IDS
 )
@@ -67,7 +72,7 @@ def _truth(sample_id: str, specs: dict[str, dict[str, Any]]) -> dict[str, Any]:
 
 
 def test_manifest_contains_geometry_samples(specs: dict[str, dict[str, Any]]) -> None:
-    assert len(specs) == 18
+    assert len(specs) == 22
     assert set(NEW_SAMPLE_IDS) <= set(specs)
 
 
@@ -299,7 +304,7 @@ def test_new_sample_matches_without_detection_errors(
     assert [failure["code"] for failure in result["failures"]] == []
 
 
-def test_all_eighteen_samples_validate_and_preflight(
+def test_all_samples_validate_and_preflight(
     specs: dict[str, dict[str, Any]],
     pdfs: dict[str, Path],
 ) -> None:
@@ -404,3 +409,204 @@ def test_f04_bbox_and_rects_follow_structural_contract(
     assert rect.bottom < rect.top
     assert hit.bbox is not None
     assert hit.bbox.as_tuple() == rect.as_tuple()
+
+
+# ---------------------------------------------------------------------------
+# M0-06B2-3: A02 / A04 / H02 / H04 dedicated regression tests.
+# A02 and H02 exercise repeated same-page hits on distinct lines, A04 pins the
+# case-sensitivity semantics, and H04 is a boundary sample that records the
+# non-overlapping substring behaviour without acting as a quality gate.
+# ---------------------------------------------------------------------------
+
+A02_TRUTH_BOXES = [
+    [100.0, 497.516, 138.688, 508.616],
+    [100.0, 437.516, 138.688, 448.616],
+    [100.0, 377.516, 138.688, 388.616],
+]
+A04_TRUTH_BOXES = [
+    [100.0, 297.516, 130.672, 308.616],
+    [134.008, 297.516, 172.012, 308.616],
+]
+H02_BASELINES = (500.0, 440.0, 380.0, 320.0, 260.0)
+H04_TRUTH_BOXES = [
+    [100.0, 297.516, 113.344, 308.616],
+    [113.344, 297.516, 126.688, 308.616],
+]
+
+
+def _assert_box(actual, expected, tolerance: float = 1e-6) -> None:
+    assert list(actual) == pytest.approx(expected, abs=tolerance)
+
+
+def _assert_hits_match_truth_centers(hits, boxes, tolerance: float = 1.0) -> None:
+    assert len(hits) == len(boxes)
+    for hit, box in zip(hits, boxes, strict=True):
+        assert hit.bbox is not None
+        assert metrics.distance(hit.bbox.as_tuple(), box) <= tolerance
+
+
+def test_new_sample_evaluations_are_recorded(specs: dict[str, dict[str, Any]]) -> None:
+    assert specs["A02"]["evaluation"] == "direct"
+    assert specs["A04"]["evaluation"] == "direct"
+    assert specs["H02"]["evaluation"] == "direct"
+    assert specs["H04"]["evaluation"] == "boundary"
+    assert specs["H04"]["truth_level"] == "boundary"
+
+
+def test_a02_truth_has_three_distinct_line_boxes(specs: dict[str, dict[str, Any]]) -> None:
+    truth_data = _truth("A02", specs)
+    query = truth_data["queries"][0]
+
+    assert truth_data["page_count"] == 1
+    assert query["expected_count"] == 3
+    assert [occurrence["page_index"] for occurrence in query["occurrences"]] == [0, 0, 0]
+    for occurrence, expected in zip(query["occurrences"], A02_TRUTH_BOXES, strict=True):
+        _assert_box(occurrence["bbox"], expected)
+        assert occurrence["parts"][0]["text"] == "quokka"
+
+
+def test_a02_service_returns_three_sorted_hits(
+    specs: dict[str, dict[str, Any]],
+    pdfs: dict[str, Path],
+) -> None:
+    hits = _hits("A02", specs, pdfs)
+
+    assert len(hits) == 3
+    assert [hit.page_index for hit in hits] == [0, 0, 0]
+    assert [hit.page_number for hit in hits] == [1, 1, 1]
+    assert [hit.matched_text for hit in hits] == ["quokka", "quokka", "quokka"]
+    assert [hit.char_start for hit in hits] == sorted(hit.char_start for hit in hits)
+    assert all(len(hit.rects) == 1 for hit in hits)
+    rects = [hit.rects[0].as_tuple() for hit in hits]
+    assert len(set(rects)) == 3
+    _assert_hits_match_truth_centers(hits, A02_TRUTH_BOXES)
+
+
+def test_a04_truth_counts_case_sensitive_and_insensitive(
+    specs: dict[str, dict[str, Any]],
+) -> None:
+    truth_data = _truth("A04", specs)
+    sensitive, insensitive = truth_data["queries"]
+
+    assert sensitive["match_case"] is True
+    assert sensitive["expected_count"] == 0
+    assert insensitive["match_case"] is False
+    assert insensitive["expected_count"] == 2
+    for occurrence, expected in zip(insensitive["occurrences"], A04_TRUTH_BOXES, strict=True):
+        _assert_box(occurrence["bbox"], expected)
+    assert [occurrence["parts"][0]["text"] for occurrence in insensitive["occurrences"]] == [
+        "Quick",
+        "QUICK",
+    ]
+
+
+def test_a04_service_respects_case_semantics(
+    specs: dict[str, dict[str, Any]],
+    pdfs: dict[str, Path],
+) -> None:
+    query = specs["A04"]["queries"][0]["text"]
+
+    sensitive_hits = search_anchors(pdfs["A04"], query, match_case=True)
+    insensitive_hits = search_anchors(pdfs["A04"], query, match_case=False)
+
+    assert sensitive_hits == []
+    assert len(insensitive_hits) == 2
+    assert [hit.matched_text for hit in insensitive_hits] == ["Quick", "QUICK"]
+    assert [hit.char_start for hit in insensitive_hits] == sorted(
+        hit.char_start for hit in insensitive_hits
+    )
+    # Mixed-case segments use reportlab layout boxes whose advance widths differ
+    # slightly from PDFium ink boxes; measured center error is ~1.05 pt.
+    _assert_hits_match_truth_centers(insensitive_hits, A04_TRUTH_BOXES, tolerance=1.1)
+
+
+def test_h02_truth_has_five_line_boxes(specs: dict[str, dict[str, Any]]) -> None:
+    truth_data = _truth("H02", specs)
+    query = truth_data["queries"][0]
+    expected_boxes = [
+        [100.0, baseline_y - 2.484, 138.688, baseline_y + 8.616] for baseline_y in H02_BASELINES
+    ]
+
+    assert truth_data["page_count"] == 1
+    assert query["expected_count"] == 5
+    assert [occurrence["page_index"] for occurrence in query["occurrences"]] == [0] * 5
+    for occurrence, expected in zip(query["occurrences"], expected_boxes, strict=True):
+        _assert_box(occurrence["bbox"], expected)
+
+
+def test_h02_service_returns_five_sorted_hits(
+    specs: dict[str, dict[str, Any]],
+    pdfs: dict[str, Path],
+) -> None:
+    hits = _hits("H02", specs, pdfs)
+    expected_boxes = [
+        [100.0, baseline_y - 2.484, 138.688, baseline_y + 8.616] for baseline_y in H02_BASELINES
+    ]
+
+    assert len(hits) == 5
+    assert [hit.page_index for hit in hits] == [0] * 5
+    assert [hit.page_number for hit in hits] == [1] * 5
+    assert [hit.matched_text for hit in hits] == ["quokka"] * 5
+    assert [hit.char_start for hit in hits] == sorted(hit.char_start for hit in hits)
+    assert len({hit.rects[0].as_tuple() for hit in hits}) == 5
+    _assert_hits_match_truth_centers(hits, expected_boxes)
+
+
+def test_h04_truth_records_non_overlapping_count(specs: dict[str, dict[str, Any]]) -> None:
+    truth_data = _truth("H04", specs)
+    query = truth_data["queries"][0]
+
+    assert query["query"] == "aa"
+    assert query["expected_count"] == 2
+    assert [occurrence["page_index"] for occurrence in query["occurrences"]] == [0, 0]
+    for occurrence, expected in zip(query["occurrences"], H04_TRUTH_BOXES, strict=True):
+        _assert_box(occurrence["bbox"], expected)
+
+
+def test_h04_service_matches_non_overlapping_truth(
+    specs: dict[str, dict[str, Any]],
+    pdfs: dict[str, Path],
+) -> None:
+    # H04 is a boundary sample: the assertion records current behaviour (two
+    # non-overlapping hits) instead of gating overlapping-substring semantics.
+    hits = _hits("H04", specs, pdfs)
+
+    assert len(hits) == 2
+    assert [hit.matched_text for hit in hits] == ["aa", "aa"]
+    assert [hit.char_start for hit in hits] == [0, 2]
+    _assert_hits_match_truth_centers(hits, H04_TRUTH_BOXES)
+
+    record = runner.run_sample(specs["H04"], pdfs["H04"], repeats=1, warmup=0)
+    predictions = [query["predicted_hits"] for query in record["queries"]]
+    result = match.match_sample(_truth("H04", specs), predictions, specs["H04"])
+    query_result = result["queries"][0]
+
+    assert (query_result["tp"], query_result["fp"], query_result["fn"]) == (2, 0, 0)
+    assert query_result["ambiguous_count"] == 0
+    assert result["failures"] == []
+
+
+def test_h04_boundary_is_excluded_from_quality_metrics(
+    specs: dict[str, dict[str, Any]],
+    pdfs: dict[str, Path],
+) -> None:
+    record = runner.run_sample(specs["H04"], pdfs["H04"], repeats=1, warmup=0)
+    predictions = [query["predicted_hits"] for query in record["queries"]]
+    matched = match.match_sample(_truth("H04", specs), predictions, specs["H04"])
+    record.update(
+        {
+            "evaluation": str(specs["H04"]["evaluation"]),
+            "preflight_ok": True,
+            "preflight_errors": [],
+            "queries": matched["queries"],
+            "failures": matched["failures"],
+        }
+    )
+
+    summary = metrics.aggregate([record])
+
+    assert summary["quality_sample_count"] == 0
+    assert summary["excluded_sample_count"] == 1
+    assert summary["query_count"] == 0
+    assert summary["detection"]["tp"] == 0
+    assert summary["failures"]["counts"] == {}

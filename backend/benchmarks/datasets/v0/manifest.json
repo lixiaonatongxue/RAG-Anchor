@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "v0",
-  "description": "M0-06B2-2 deterministic anchoring benchmark (18 samples).",
+  "description": "M0-06B2-3 deterministic anchoring benchmark (22 samples).",
   "samples": [
     "A01_single_hit.json",
     "H01_same_page_repeats.json",
@@ -20,6 +20,10 @@
     "C02_cross_line_multipage.json",
     "C03_three_line.json",
     "B03_nonbmp_prefix.json",
-    "B04_nonbmp_query.json"
+    "B04_nonbmp_query.json",
+    "A02_same_page_repeats.json",
+    "A04_case_sensitive.json",
+    "H02_five_lines.json",
+    "H04_overlapping_boundary.json"
   ]
 }

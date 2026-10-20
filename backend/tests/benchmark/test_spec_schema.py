@@ -44,8 +44,8 @@ def test_manifest_lists_unique_samples() -> None:
     manifest = truth.load_manifest(DATASET_DIR)
     assert manifest["schema_version"] == 1
     assert manifest["name"] == "v0"
-    assert len(manifest["samples"]) == 18
-    assert len(set(manifest["samples"])) == 18
+    assert len(manifest["samples"]) == 22
+    assert len(set(manifest["samples"])) == 22
 
 
 def test_dataset_loads_expected_samples(specs: list[dict[str, Any]]) -> None:
@@ -68,6 +68,10 @@ def test_dataset_loads_expected_samples(specs: list[dict[str, Any]]) -> None:
         "C03",
         "B03",
         "B04",
+        "A02",
+        "A04",
+        "H02",
+        "H04",
     ]
     assert len({spec["id"] for spec in specs}) == len(specs)
 

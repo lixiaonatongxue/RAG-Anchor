@@ -101,11 +101,11 @@ def test_dataset_section_matches_manifest(built: dict[str, Any], dataset) -> Non
     section = built["dataset"]
 
     assert section["name"] == "v0"
-    assert section["sample_count"] == len(specs) == 18
+    assert section["sample_count"] == len(specs) == 22
     assert re.fullmatch(r"[0-9a-f]{64}", section["dataset_sha256"])
     assert section["evaluation_split"] == {
         "direct": [spec["id"] for spec in specs if spec["evaluation"] == "direct"],
-        "boundary": ["B03"],
+        "boundary": ["B03", "H04"],
         "unsupported": ["B04"],
     }
 
@@ -113,10 +113,10 @@ def test_dataset_section_matches_manifest(built: dict[str, Any], dataset) -> Non
 def test_summary_reports_perfect_real_metrics(built: dict[str, Any]) -> None:
     summary = built["summary"]
 
-    assert summary["quality_sample_count"] == 16
-    assert summary["excluded_sample_count"] == 2
-    assert summary["query_count"] == 17
-    assert summary["detection"]["tp"] == 23
+    assert summary["quality_sample_count"] == 19
+    assert summary["excluded_sample_count"] == 3
+    assert summary["query_count"] == 21
+    assert summary["detection"]["tp"] == 33
     assert summary["detection"]["fp"] == 0
     assert summary["detection"]["fn"] == 0
     assert summary["detection"]["precision"] == 1.0
@@ -124,7 +124,7 @@ def test_summary_reports_perfect_real_metrics(built: dict[str, Any]) -> None:
     assert summary["detection"]["f1"] == 1.0
     assert summary["detection"]["count_match_rate"] == 1.0
     assert summary["page"]["page_count_exact_rate"] == 1.0
-    assert summary["geometry"]["occurrence"]["center_error_pt"]["count"] == 23
+    assert summary["geometry"]["occurrence"]["center_error_pt"]["count"] == 33
     assert summary["multiline"]["rect_count_exact_rate"] == 1.0
 
 
@@ -173,7 +173,7 @@ def test_report_is_json_serializable_without_nan_or_infinity(
 
     assert "NaN" not in text
     assert "Infinity" not in text
-    assert '"quality_sample_count": 16' in text
+    assert '"quality_sample_count": 19' in text
 
 
 def test_report_contains_no_local_absolute_paths(built: dict[str, Any]) -> None:
@@ -237,5 +237,5 @@ def test_invalid_fixture_is_split_into_its_own_section(dataset) -> None:
     assert built["failures"]["counts"] == {"F10_INVALID_FIXTURE": 1}
     assert len(built["failures"]["invalid_fixtures"]) == 1
     assert built["failures"]["invalid_fixtures"][0]["sample_id"] == "A01"
-    assert built["summary"]["quality_sample_count"] == 15
-    assert built["summary"]["excluded_sample_count"] == 3
+    assert built["summary"]["quality_sample_count"] == 18
+    assert built["summary"]["excluded_sample_count"] == 4

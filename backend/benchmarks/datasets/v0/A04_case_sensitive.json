@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "id": "A04",
+  "scenario": "A",
+  "title": "case-sensitive and case-insensitive counts for Quick and QUICK",
+  "evaluation": "direct",
+  "truth_level": "layout-exact",
+  "page_size": [612.0, 792.0],
+  "rotation": 0,
+  "cropbox": null,
+  "pages": [
+    {
+      "lines": [
+        {
+          "baseline_y": 300.0,
+          "segments": [
+            {"x": 100.0, "text": "Quick ", "font": "Helvetica", "size": 12.0},
+            {"x": 134.008, "text": "QUICK", "font": "Helvetica", "size": 12.0}
+          ]
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "text": "quick",
+      "match_case": true,
+      "expected": []
+    },
+    {
+      "text": "quick",
+      "match_case": false,
+      "expected": [
+        {
+          "page_index": 0,
+          "parts": [
+            {"line_index": 0, "segment_index": 0, "char_offset": 0, "char_length": 5}
+          ]
+        },
+        {
+          "page_index": 0,
+          "parts": [
+            {"line_index": 0, "segment_index": 1, "char_offset": 0, "char_length": 5}
+          ]
+        }
+      ]
+    }
+  ],
+  "match_radius_pt": 12.0,
+  "min_separation_pt": 24.0
+}
