@@ -16,6 +16,8 @@ from typing import Any
 
 from reportlab.pdfbase import pdfmetrics
 
+from benchmarks.fonts import ensure_registered
+
 SCHEMA_VERSION = 1
 EVALUATIONS = frozenset({"direct", "boundary", "unsupported"})
 TRUTH_LEVELS = frozenset({"layout-exact", "layout-band", "detection-only", "boundary"})
@@ -138,6 +140,8 @@ def _layout_box(
     piece = text[char_offset : char_offset + char_length]
     if not piece:
         raise TruthError("layout part resolves to an empty substring")
+    if ensure_registered([font]):
+        raise TruthError(f"no usable font metrics for {font!r}")
     try:
         prefix_width = pdfmetrics.stringWidth(text[:char_offset], font, size)
         piece_width = pdfmetrics.stringWidth(piece, font, size)
@@ -218,7 +222,12 @@ def compute_truth(spec: dict[str, Any]) -> dict[str, Any]:
                     }
                 )
             joined = normalize_text("\n".join(str(part["text"]) for part in parts))
-            if joined != normalize_text(query_text):
+            expected_text = normalize_text(query_text)
+            if match_case:
+                matches = joined == expected_text
+            else:
+                matches = joined.casefold() == expected_text.casefold()
+            if not matches:
                 raise TruthError("expected parts do not spell the query after normalization")
             bbox = _union_box(boxes)
             occurrences.append(

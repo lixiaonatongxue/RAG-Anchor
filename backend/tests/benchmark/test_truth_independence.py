@@ -13,7 +13,14 @@ from benchmarks import truth
 from reportlab.pdfbase import pdfmetrics
 
 FORBIDDEN_ROOTS = frozenset({"pypdfium2", "rag_anchor"})
-TRUTH_MODULES = ("truth.py", "generate.py", "match.py", "metrics.py", "report.py")
+TRUTH_MODULES = (
+    "truth.py",
+    "generate.py",
+    "match.py",
+    "metrics.py",
+    "report.py",
+    "fonts.py",
+)
 
 
 @pytest.fixture(scope="module")

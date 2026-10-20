@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "id": "C02",
+  "scenario": "C",
+  "title": "cross-line match repeated on three pages",
+  "evaluation": "direct",
+  "truth_level": "layout-exact",
+  "page_size": [612.0, 792.0],
+  "rotation": 0,
+  "cropbox": null,
+  "pages": [
+    {
+      "lines": [
+        {
+          "baseline_y": 500.0,
+          "segments": [
+            {"x": 100.0, "text": "alpha beta", "font": "Helvetica", "size": 12.0}
+          ]
+        },
+        {
+          "baseline_y": 450.0,
+          "segments": [
+            {"x": 100.0, "text": "gamma delta", "font": "Helvetica", "size": 12.0}
+          ]
+        }
+      ]
+    },
+    {
+      "lines": [
+        {
+          "baseline_y": 500.0,
+          "segments": [
+            {"x": 100.0, "text": "alpha beta", "font": "Helvetica", "size": 12.0}
+          ]
+        },
+        {
+          "baseline_y": 450.0,
+          "segments": [
+            {"x": 100.0, "text": "gamma delta", "font": "Helvetica", "size": 12.0}
+          ]
+        }
+      ]
+    },
+    {
+      "lines": [
+        {
+          "baseline_y": 500.0,
+          "segments": [
+            {"x": 100.0, "text": "alpha beta", "font": "Helvetica", "size": 12.0}
+          ]
+        },
+        {
+          "baseline_y": 450.0,
+          "segments": [
+            {"x": 100.0, "text": "gamma delta", "font": "Helvetica", "size": 12.0}
+          ]
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "text": "beta gamma",
+      "match_case": true,
+      "expected": [
+        {
+          "page_index": 0,
+          "parts": [
+            {"line_index": 0, "segment_index": 0, "char_offset": 6, "char_length": 4},
+            {"line_index": 1, "segment_index": 0, "char_offset": 0, "char_length": 5}
+          ]
+        },
+        {
+          "page_index": 1,
+          "parts": [
+            {"line_index": 0, "segment_index": 0, "char_offset": 6, "char_length": 4},
+            {"line_index": 1, "segment_index": 0, "char_offset": 0, "char_length": 5}
+          ]
+        },
+        {
+          "page_index": 2,
+          "parts": [
+            {"line_index": 0, "segment_index": 0, "char_offset": 6, "char_length": 4},
+            {"line_index": 1, "segment_index": 0, "char_offset": 0, "char_length": 5}
+          ]
+        }
+      ]
+    }
+  ],
+  "match_radius_pt": 12.0,
+  "min_separation_pt": 24.0
+}

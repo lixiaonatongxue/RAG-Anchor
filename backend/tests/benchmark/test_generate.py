@@ -10,6 +10,10 @@ import pytest
 from bench_helpers import DATASET_DIR
 from benchmarks import generate, truth
 from pypdf import PdfReader
+from pypdfium2 import PdfDocument
+from pypdfium2.raw import FPDFText_CountChars, FPDFText_GetUnicode
+
+from rag_anchor.services import search_anchors
 
 
 @pytest.fixture(scope="module")
@@ -25,7 +29,7 @@ def generated(specs, tmp_path_factory):
 
 
 def test_every_fixture_passes_preflight(generated) -> None:
-    assert len(generated) == 12
+    assert len(generated) == 18
     for spec, path in generated:
         assert path.name == f"{spec['id']}.pdf"
         assert path.read_bytes().startswith(b"%PDF-")
@@ -107,3 +111,67 @@ def test_generate_sample_creates_nested_directory(
     path = generate.generate_sample(spec, output)
     assert path == output / "A01.pdf"
     assert path.is_file()
+
+
+def _find(generated, sample_id: str) -> tuple[dict[str, Any], Path]:
+    return next((spec, path) for spec, path in generated if spec["id"] == sample_id)
+
+
+def _pdfium_page_text(path: Path) -> str:
+    document = PdfDocument(str(path))
+    try:
+        page = document[0]
+        text_page = page.get_textpage()
+        try:
+            count = FPDFText_CountChars(text_page)
+            return "".join(chr(FPDFText_GetUnicode(text_page, index)) for index in range(count))
+        finally:
+            text_page.close()
+    finally:
+        document.close()
+
+
+def test_b01_cjk_text_is_extracted_consistently(generated) -> None:
+    spec, path = _find(generated, "B01")
+    reader = PdfReader(str(path))
+    pypdf_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+
+    assert "中文" in pypdf_text
+    assert "证据" in pypdf_text
+    assert _pdfium_page_text(path) == "中文 quick 证据"
+    assert generate.preflight_pdf(spec, path) == []
+
+
+def test_b01_production_service_answers_cjk_queries(generated) -> None:
+    _, path = _find(generated, "B01")
+
+    for query in ("中文", "证据", "中文 quick", "quick 证据"):
+        hits = search_anchors(path, query)
+        assert len(hits) == 1, query
+        assert hits[0].page_index == 0
+    # The benchmark specification still declares only the ASCII query.  The
+    # assertions above prove extraction/query support for this fixture only.
+    assert search_anchors(path, "quick")[0].matched_text == "quick"
+
+
+def test_nonbmp_fixtures_do_not_contain_true_u1d11e(generated) -> None:
+    for sample_id in ("B03", "B04"):
+        spec, path = _find(generated, sample_id)
+        reader = PdfReader(str(path))
+        pypdf_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        pdfium_text = _pdfium_page_text(path)
+
+        # reportlab 5.0.1 writes an odd-length ToUnicode entry (1D11E), which
+        # pypdf rejects and PDFium truncates to U+1D11.  Neither extractor sees
+        # the original non-BMP code point, so preflight cannot validate it.
+        assert "\U0001d11e" not in pypdf_text
+        assert "\U0001d11e" not in pdfium_text
+        assert "\u1d11" not in pypdf_text
+        assert "\u1d11" in pdfium_text
+        assert generate.preflight_pdf(spec, path) == []
+
+        # PDFium search ignores whitespace differences (U+1D11 + "quick"
+        # matches U+1D11 + space + "quick"); therefore B04's zero hit is caused
+        # by the missing U+1D11E, not by the space in the fixture text.
+        assert len(search_anchors(path, "\u1d11quick")) == 1
+        assert search_anchors(path, "\U0001d11equick") == []

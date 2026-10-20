@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "id": "B01",
+  "scenario": "B",
+  "title": "CJK prefix before the ASCII hit",
+  "evaluation": "direct",
+  "truth_level": "layout-band",
+  "page_size": [612.0, 792.0],
+  "rotation": 0,
+  "cropbox": null,
+  "pages": [
+    {
+      "lines": [
+        {
+          "baseline_y": 300.0,
+          "segments": [
+            {"x": 100.0, "text": "中文 ", "font": "WQYMicro", "size": 12.0},
+            {"x": 127.1171875, "text": "quick", "font": "WQYMicro", "size": 12.0},
+            {"x": 155.828125, "text": " 证据", "font": "WQYMicro", "size": 12.0}
+          ]
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "text": "quick",
+      "match_case": true,
+      "expected": [
+        {
+          "page_index": 0,
+          "parts": [
+            {"line_index": 0, "segment_index": 1, "char_offset": 0, "char_length": 5}
+          ]
+        }
+      ]
+    }
+  ],
+  "match_radius_pt": 12.0,
+  "min_separation_pt": 24.0
+}

@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "id": "H03",
+  "scenario": "H",
+  "title": "mixed-case repeats with case-sensitive and insensitive queries",
+  "evaluation": "direct",
+  "truth_level": "layout-exact",
+  "page_size": [612.0, 792.0],
+  "rotation": 0,
+  "cropbox": null,
+  "pages": [
+    {
+      "lines": [
+        {
+          "baseline_y": 300.0,
+          "segments": [
+            {"x": 100.0, "text": "Quokka ", "font": "Helvetica", "size": 12.0},
+            {"x": 144.688, "text": "QUOKKA ", "font": "Helvetica", "size": 12.0},
+            {"x": 199.372, "text": "quokka", "font": "Helvetica", "size": 12.0}
+          ]
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "text": "quokka",
+      "match_case": true,
+      "expected": [
+        {
+          "page_index": 0,
+          "parts": [
+            {"line_index": 0, "segment_index": 2, "char_offset": 0, "char_length": 6}
+          ]
+        }
+      ]
+    },
+    {
+      "text": "quokka",
+      "match_case": false,
+      "expected": [
+        {
+          "page_index": 0,
+          "parts": [
+            {"line_index": 0, "segment_index": 0, "char_offset": 0, "char_length": 6}
+          ]
+        },
+        {
+          "page_index": 0,
+          "parts": [
+            {"line_index": 0, "segment_index": 1, "char_offset": 0, "char_length": 6}
+          ]
+        },
+        {
+          "page_index": 0,
+          "parts": [
+            {"line_index": 0, "segment_index": 2, "char_offset": 0, "char_length": 6}
+          ]
+        }
+      ]
+    }
+  ],
+  "match_radius_pt": 12.0,
+  "min_separation_pt": 24.0
+}

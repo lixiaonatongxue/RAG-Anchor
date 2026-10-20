@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "v0",
-  "description": "M0-06B2-1 deterministic anchoring benchmark (12 samples).",
+  "description": "M0-06B2-2 deterministic anchoring benchmark (18 samples).",
   "samples": [
     "A01_single_hit.json",
     "H01_same_page_repeats.json",
@@ -14,6 +14,12 @@
     "F02_rotate_180.json",
     "F03_rotate_270.json",
     "A03_multipage.json",
-    "F04_rotate_90_cropbox.json"
+    "F04_rotate_90_cropbox.json",
+    "H03_mixed_case.json",
+    "B01_cjk_prefix.json",
+    "C02_cross_line_multipage.json",
+    "C03_three_line.json",
+    "B03_nonbmp_prefix.json",
+    "B04_nonbmp_query.json"
   ]
 }

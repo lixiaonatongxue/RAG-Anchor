@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "id": "B03",
+  "scenario": "B",
+  "title": "non-BMP prefix before the ASCII hit",
+  "evaluation": "boundary",
+  "truth_level": "layout-band",
+  "page_size": [612.0, 792.0],
+  "rotation": 0,
+  "cropbox": null,
+  "pages": [
+    {
+      "lines": [
+        {
+          "baseline_y": 300.0,
+          "segments": [
+            {"x": 100.0, "text": "𝄞 ", "font": "FreeSerif", "size": 12.0},
+            {"x": 110.092, "text": "quick is here.", "font": "Helvetica", "size": 12.0}
+          ]
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "text": "quick",
+      "match_case": true,
+      "expected": [
+        {
+          "page_index": 0,
+          "parts": [
+            {"line_index": 0, "segment_index": 1, "char_offset": 0, "char_length": 5}
+          ]
+        }
+      ]
+    }
+  ],
+  "match_radius_pt": 12.0,
+  "min_separation_pt": 24.0
+}

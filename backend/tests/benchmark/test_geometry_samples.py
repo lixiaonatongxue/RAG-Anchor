@@ -13,7 +13,27 @@ from pypdf import PdfReader
 
 from rag_anchor.services import search_anchors
 
-NEW_SAMPLE_IDS = ("E01", "E02", "F01", "F02", "F03", "A03", "F04")
+NEW_SAMPLE_IDS = (
+    "E01",
+    "E02",
+    "F01",
+    "F02",
+    "F03",
+    "A03",
+    "F04",
+    "H03",
+    "B01",
+    "C02",
+    "C03",
+    "B03",
+    "B04",
+)
+# B03/B04 are the non-BMP boundary/unsupported samples; they must not be
+# gated by the direct-quality detection and matching assertions.
+BOUNDARY_SAMPLE_IDS = ("B03", "B04")
+DIRECT_NEW_SAMPLE_IDS = tuple(
+    sample_id for sample_id in NEW_SAMPLE_IDS if sample_id not in BOUNDARY_SAMPLE_IDS
+)
 ORIGINAL_SAMPLE_IDS = ("A01", "H01", "C01", "B02", "A05")
 
 E01_CROPBOX = [50.0, 100.0, 400.0, 500.0]
@@ -47,7 +67,7 @@ def _truth(sample_id: str, specs: dict[str, dict[str, Any]]) -> dict[str, Any]:
 
 
 def test_manifest_contains_geometry_samples(specs: dict[str, dict[str, Any]]) -> None:
-    assert len(specs) == 12
+    assert len(specs) == 18
     assert set(NEW_SAMPLE_IDS) <= set(specs)
 
 
@@ -259,7 +279,7 @@ def test_original_samples_detection_does_not_regress(
         ], sample_id
 
 
-@pytest.mark.parametrize("sample_id", NEW_SAMPLE_IDS)
+@pytest.mark.parametrize("sample_id", DIRECT_NEW_SAMPLE_IDS)
 def test_new_sample_matches_without_detection_errors(
     sample_id: str,
     specs: dict[str, dict[str, Any]],
@@ -279,7 +299,7 @@ def test_new_sample_matches_without_detection_errors(
     assert [failure["code"] for failure in result["failures"]] == []
 
 
-def test_all_twelve_samples_validate_and_preflight(
+def test_all_eighteen_samples_validate_and_preflight(
     specs: dict[str, dict[str, Any]],
     pdfs: dict[str, Path],
 ) -> None:

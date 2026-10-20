@@ -15,6 +15,7 @@ from pypdf import PdfReader, PdfWriter
 from pypdf.generic import RectangleObject
 from reportlab.pdfgen import canvas
 
+from benchmarks.fonts import ensure_registered
 from benchmarks.truth import count_in_text, page_text
 
 
@@ -24,6 +25,16 @@ class GenerationError(RuntimeError):
 
 def render_pdf_bytes(spec: dict[str, Any]) -> bytes:
     """Render one specification into deterministic PDF bytes."""
+    required_fonts = {
+        str(segment["font"])
+        for page in spec["pages"]
+        for line in page["lines"]
+        for segment in line["segments"]
+    }
+    unavailable = ensure_registered(required_fonts)
+    if unavailable:
+        raise GenerationError("required benchmark fonts are unavailable: " + ", ".join(unavailable))
+
     width, height = (float(value) for value in spec["page_size"])
     buffer = io.BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=(width, height), invariant=1)
