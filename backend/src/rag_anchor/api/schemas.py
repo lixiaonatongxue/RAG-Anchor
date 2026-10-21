@@ -7,6 +7,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from rag_anchor.services.retrieval_service import (
+    DEFAULT_RETRIEVAL_LIMIT,
+    MAX_QUERY_LENGTH,
+    MAX_RETRIEVAL_LIMIT,
+)
+
 
 class DocumentResponse(BaseModel):
     """Public metadata for one stored PDF.
@@ -96,3 +102,60 @@ class AnchorSearchResponse(BaseModel):
     match_case: bool
     total: int = Field(ge=0)
     results: list[AnchorHitResponse]
+
+
+class ChunkRetrievalRequest(BaseModel):
+    """Search persisted chunks across all documents or one document."""
+
+    query: str = Field(min_length=1, max_length=MAX_QUERY_LENGTH)
+    document_id: UUID | None = None
+    match_case: bool = True
+    limit: int = Field(
+        default=DEFAULT_RETRIEVAL_LIMIT,
+        ge=1,
+        le=MAX_RETRIEVAL_LIMIT,
+    )
+    offset: int = Field(default=0, ge=0)
+
+    @field_validator("query")
+    @classmethod
+    def _query_must_contain_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("query must be a non-empty, non-whitespace string")
+        return value
+
+
+class RetrievalHitResponse(BaseModel):
+    """One traceable match in a persisted chunk.
+
+    ``start_offset``/``end_offset`` delimit the chunk inside its stored page
+    text. ``match_start``/``match_end`` delimit the hit inside that same page
+    text. These are Python string offsets, never PDF user-space coordinates.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    document_id: UUID
+    chunk_id: str
+    page_index: int = Field(ge=0)
+    page_number: int = Field(ge=1)
+    chunk_index: int = Field(ge=0)
+    start_offset: int = Field(ge=0)
+    end_offset: int = Field(ge=0)
+    match_start: int = Field(ge=0)
+    match_end: int = Field(ge=0)
+    hit_text: str
+    chunk_text: str
+    extraction_version: str
+
+
+class ChunkRetrievalResponse(BaseModel):
+    """One page of retrieval matches plus the unpaginated total."""
+
+    query: str
+    match_case: bool
+    document_id: UUID | None
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    offset: int = Field(ge=0)
+    results: list[RetrievalHitResponse]

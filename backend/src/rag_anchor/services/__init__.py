@@ -26,6 +26,14 @@ from rag_anchor.services.index_service import (
     DocumentIndexSourceError,
     IndexResult,
 )
+from rag_anchor.services.retrieval_service import (
+    DEFAULT_RETRIEVAL_LIMIT,
+    MAX_QUERY_LENGTH,
+    MAX_RETRIEVAL_LIMIT,
+    ChunkRetrievalService,
+    RetrievalMatch,
+    RetrievalResult,
+)
 from rag_anchor.services.text_extraction_service import (
     PdfTextExtractionError,
     PdfTextOpenError,
@@ -37,6 +45,10 @@ from rag_anchor.services.text_extraction_service import (
 __all__ = [
     "DEFAULT_MAX_CHARS",
     "DEFAULT_OVERLAP_CHARS",
+    "DEFAULT_RETRIEVAL_LIMIT",
+    "MAX_QUERY_LENGTH",
+    "MAX_RETRIEVAL_LIMIT",
+    "ChunkRetrievalService",
     "DocumentIndexError",
     "DocumentIndexPersistenceError",
     "DocumentIndexService",
@@ -53,6 +65,8 @@ __all__ = [
     "PdfTextExtractionError",
     "PdfTextOpenError",
     "PdfTextReadError",
+    "RetrievalMatch",
+    "RetrievalResult",
     "UploadTooLargeError",
     "chunk_page_texts",
     "extract_page_texts",

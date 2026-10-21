@@ -338,6 +338,38 @@ class DocumentRepository:
             ).fetchall()
         return [_row_to_chunk(row) for row in rows]
 
+    def list_chunks(self, *, document_id: UUID | None = None) -> list[TextChunk]:
+        """Return persisted chunks in deterministic retrieval order.
+
+        Retrieval never re-parses a PDF: this method is the only source of
+        chunk text. Ordering is explicit so callers can reproduce results even
+        if SQLite changes its physical row order.
+        """
+        with self._connect() as connection:
+            if document_id is None:
+                rows = connection.execute(
+                    """
+                    SELECT chunk_id, document_id, page_index, page_number,
+                           chunk_index, start_offset, end_offset, text,
+                           extraction_version
+                    FROM document_chunks
+                    ORDER BY document_id ASC, page_index ASC, chunk_index ASC
+                    """
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT chunk_id, document_id, page_index, page_number,
+                           chunk_index, start_offset, end_offset, text,
+                           extraction_version
+                    FROM document_chunks
+                    WHERE document_id = ?
+                    ORDER BY page_index ASC, chunk_index ASC
+                    """,
+                    (str(document_id),),
+                ).fetchall()
+        return [_row_to_chunk(row) for row in rows]
+
     def get_chunk(self, chunk_id: str) -> TextChunk | None:
         """Return one chunk by ID, or ``None`` when it is unknown."""
         with self._connect() as connection:
