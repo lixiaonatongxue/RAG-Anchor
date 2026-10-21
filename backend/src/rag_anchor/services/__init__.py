@@ -19,6 +19,13 @@ from rag_anchor.services.document_service import (
     InvalidUploadError,
     UploadTooLargeError,
 )
+from rag_anchor.services.index_service import (
+    DocumentIndexError,
+    DocumentIndexPersistenceError,
+    DocumentIndexService,
+    DocumentIndexSourceError,
+    IndexResult,
+)
 from rag_anchor.services.text_extraction_service import (
     PdfTextExtractionError,
     PdfTextOpenError,
@@ -30,10 +37,15 @@ from rag_anchor.services.text_extraction_service import (
 __all__ = [
     "DEFAULT_MAX_CHARS",
     "DEFAULT_OVERLAP_CHARS",
+    "DocumentIndexError",
+    "DocumentIndexPersistenceError",
+    "DocumentIndexService",
+    "DocumentIndexSourceError",
     "DocumentNotFoundError",
     "DocumentPersistenceError",
     "DocumentService",
     "DocumentServiceError",
+    "IndexResult",
     "InvalidUploadError",
     "PdfAnchorError",
     "PdfOpenError",
