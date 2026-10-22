@@ -157,6 +157,18 @@ VITE_API_PROXY_TARGET=http://127.0.0.1:9000
 | `DELETE` | `/api/v1/documents/{document_id}`                | 删除文档                            |
 | `GET`    | `/api/v1/documents/{document_id}/file`           | 读取 PDF 原始字节                   |
 | `POST`   | `/api/v1/documents/{document_id}/anchors/search` | 精确检索证据文字                    |
+| `POST`   | `/api/v1/documents/{document_id}/index`          | 建立或重建 Chunk 索引               |
+| `POST`   | `/api/v1/retrieval/search`                       | 在已索引 Chunk 中检索并返回来源偏移 |
+
+最小后端链路：
+
+```text
+POST /api/v1/documents                      # 上传 PDF
+POST /api/v1/documents/{document_id}/index  # 建立索引（可重复调用重建）
+POST /api/v1/retrieval/search               # 在索引中检索
+```
+
+索引由 `DocumentIndexService` 完成：`pypdfium2` 抽取页面文本，确定性切分 Chunk，并在单个 SQLite 事务内原子替换旧索引。重复调用会重建索引，最终 Chunk 集合保持一致，不会产生重复行。检索只读取已持久化的 Chunk，返回 Python 字符串偏移，不返回 PDF 几何坐标。
 
 搜索响应中的 `rects` 是 **absolute PDF user space**（points），前端通过 PDF.js viewport 映射到屏幕坐标。坐标语义见 [ADR-0001](docs/adr/0001-coordinate-contract.md)。
 
@@ -196,7 +208,7 @@ npm run build
 - 单页渲染（只渲染当前页），不做连续滚动或虚拟化；命中自动居中只滚动阅读器视口。
 - PDF 通过 `fetch` 全量加载到内存（后端上传上限 20 MiB），不依赖 HTTP Range。
 - 不支持加密 PDF、任意角度旋转文字的精确四边形、RTL、复杂表格阅读顺序。
-- 搜索每次重新打开 PDF，无索引或缓存；命中结果无分页/上限。
+- 锚点搜索每次重新打开 PDF，无坐标缓存；Chunk 检索只读取已建立索引的数据。
 - SQLite 短连接，适合单机开发，不适合多 worker 高并发写入。
 
 ## 文档

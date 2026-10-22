@@ -13,6 +13,7 @@ from rag_anchor.api.documents import router as documents_router
 from rag_anchor.api.retrieval import router as retrieval_router
 from rag_anchor.config import Settings
 from rag_anchor.services.document_service import DocumentService
+from rag_anchor.services.index_service import DocumentIndexService
 from rag_anchor.services.retrieval_service import ChunkRetrievalService
 
 API_PREFIX = "/api/v1"
@@ -33,6 +34,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """
     resolved_settings = settings or Settings.from_env()
     document_service = DocumentService(resolved_settings)
+    index_service = DocumentIndexService(document_service)
     retrieval_service = ChunkRetrievalService(document_service)
 
     @asynccontextmanager
@@ -47,6 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = resolved_settings
     app.state.document_service = document_service
+    app.state.index_service = index_service
     app.state.retrieval_service = retrieval_service
     app.include_router(documents_router, prefix=API_PREFIX)
     app.include_router(retrieval_router, prefix=API_PREFIX)

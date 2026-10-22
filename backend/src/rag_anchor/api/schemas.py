@@ -38,6 +38,24 @@ class DocumentListResponse(BaseModel):
     offset: int = Field(ge=0)
 
 
+class DocumentIndexResponse(BaseModel):
+    """Statistics of one completed index build.
+
+    ``indexed_at`` is the wall-clock time of this run. Repeated indexing of an
+    unchanged PDF rebuilds the same rows and returns the same counts; it is not
+    a cache hit.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    document_id: UUID
+    fingerprint: str
+    page_count: int = Field(ge=0)
+    chunk_count: int = Field(ge=0)
+    filtered_chunk_count: int = Field(ge=0)
+    indexed_at: datetime
+
+
 class AnchorSearchRequest(BaseModel):
     """Search payload for one stored document."""
 

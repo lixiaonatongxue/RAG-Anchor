@@ -12,6 +12,7 @@ from rag_anchor.api.schemas import (
     AnchorHitResponse,
     AnchorSearchRequest,
     AnchorSearchResponse,
+    DocumentIndexResponse,
     DocumentListResponse,
     DocumentResponse,
 )
@@ -23,6 +24,12 @@ from rag_anchor.services.document_service import (
     InvalidUploadError,
     UploadTooLargeError,
 )
+from rag_anchor.services.index_service import (
+    DocumentIndexPersistenceError,
+    DocumentIndexService,
+    DocumentIndexSourceError,
+)
+from rag_anchor.services.text_extraction_service import PdfTextExtractionError
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -36,6 +43,14 @@ def get_document_service(request: Request) -> DocumentService:
 
 
 ServiceDep = Annotated[DocumentService, Depends(get_document_service)]
+
+
+def get_index_service(request: Request) -> DocumentIndexService:
+    """Resolve the application-scoped document index service."""
+    return cast(DocumentIndexService, request.app.state.index_service)
+
+
+IndexServiceDep = Annotated[DocumentIndexService, Depends(get_index_service)]
 
 
 @router.post("", response_model=DocumentResponse, status_code=201)
@@ -131,6 +146,58 @@ def search_document_anchors(
         total=len(results),
         results=results,
     )
+
+
+@router.post("/{document_id}/index", response_model=DocumentIndexResponse)
+def index_document(
+    document_id: UUID,
+    service: IndexServiceDep,
+) -> DocumentIndexResponse:
+    """Build or rebuild the traceable text index of one stored PDF.
+
+    The whole pipeline (PDF hashing, text extraction, chunking, source
+    verification and the atomic index replacement) is delegated to
+    :meth:`DocumentIndexService.index_document`. This route only maps domain
+    failures to HTTP status codes and never writes index rows itself.
+
+    The route is synchronous so FastAPI runs the blocking PDFium and SQLite
+    work in its worker thread pool instead of the event loop.
+
+    Repeating the call rebuilds the index with the service defaults; an
+    unchanged PDF ends up with the same rows, not with duplicated chunks.
+    A failed rebuild leaves the previous index untouched because the
+    repository replaces the index in one transaction.
+    """
+    try:
+        result = service.index_document(document_id)
+    except DocumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Document not found") from exc
+    except DocumentIndexSourceError as exc:
+        # The original message contains the absolute stored path.
+        raise HTTPException(
+            status_code=500,
+            detail="Stored PDF is missing or unreadable",
+        ) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored PDF is missing or unreadable",
+        ) from exc
+    except PdfTextExtractionError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Stored PDF could not be indexed",
+        ) from exc
+    except DocumentIndexPersistenceError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Document index could not be stored",
+        ) from exc
+    except ValueError as exc:
+        # Defensive: the first version exposes no chunking parameters.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return DocumentIndexResponse.model_validate(result)
 
 
 @router.get(

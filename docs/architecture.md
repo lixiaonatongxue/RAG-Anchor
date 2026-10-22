@@ -28,12 +28,12 @@ PDF + query
 
 独立 uv 项目，FastAPI 应用。当前分层：
 
-| 层          | 职责                                                             | 当前状态                                                           |
-| ----------- | ---------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `api/`      | HTTP 路由、请求/响应模型                                         | health、文档管理（M0-04A）、证据搜索（M0-04B）、文件读取（M0-05A） |
-| `domain/`   | 与框架无关的领域模型（`AnchorHit`、`PdfRect`、`PageDescriptor`） | M0-03 已实现 `PdfRect` / `AnchorHit` / `PageDescriptor`            |
-| `services/` | PDF 解析、文本检索、文档管理                                     | M0-03 已实现 `search_anchors`；M0-04A 已实现 `DocumentService`     |
-| `infra/`    | 本地文件存储、SQLite 元数据仓储                                  | M0-04A 已实现 `DocumentRepository`                                 |
+| 层          | 职责                                                                                      | 当前状态                                                                                                                                    |
+| ----------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api/`      | HTTP 路由、请求/响应模型                                                                  | health、文档管理（M0-04A）、证据搜索（M0-04B）、文件读取（M0-05A）、索引入口（M1-03A）、Chunk 检索（M1-02）                                 |
+| `domain/`   | 与框架无关的领域模型（`AnchorHit`、`PdfRect`、`PageDescriptor`、`PageText`、`TextChunk`） | M0-03 已实现 `PdfRect` / `AnchorHit` / `PageDescriptor`；M1-01 已实现 `PageText` / `TextChunk`                                              |
+| `services/` | PDF 解析、文本抽取与切分、索引、检索、文档管理                                            | M0-03 `search_anchors`；M0-04A `DocumentService`；M1-01 文本抽取与 Chunk 切分；M1-02 `ChunkRetrievalService`；M1-03A `DocumentIndexService` |
+| `infra/`    | 本地文件存储、SQLite 元数据仓储                                                           | M0-04A `DocumentRepository`；M1-01 新增页面文本、Chunk 与索引元数据表                                                                       |
 
 运行时配置位于 `rag_anchor/config.py`（读取 `RAG_ANCHOR_DATA_DIR` 与 `RAG_ANCHOR_MAX_UPLOAD_BYTES`）。
 
@@ -59,17 +59,21 @@ def search_anchors(
 - `rects` 为逐行矩形，跨行命中保留多行矩形，不生成跨行大框。
 - 所有矩形均为 PDF user space 绝对坐标（points）。
 
-### 2.3 HTTP 接口（M0-04A / M0-04B / M0-05A）
+### 2.3 HTTP 接口（M0-04A / M0-04B / M0-05A / M1-02 / M1-03A）
 
-| 方法   | 路径                                             | 说明                                |
-| ------ | ------------------------------------------------ | ----------------------------------- |
-| GET    | `/api/v1/health`                                 | 健康检查                            |
-| POST   | `/api/v1/documents`                              | 上传 PDF（multipart `file`）        |
-| GET    | `/api/v1/documents`                              | 分页列出文档                        |
-| GET    | `/api/v1/documents/{document_id}`                | 查询单个文档元数据                  |
-| DELETE | `/api/v1/documents/{document_id}`                | 删除文档元数据与存储文件            |
-| POST   | `/api/v1/documents/{document_id}/anchors/search` | 检索证据文字并返回全部命中位置      |
-| GET    | `/api/v1/documents/{document_id}/file`           | 读取已上传 PDF 原始字节（内联展示） |
+| 方法   | 路径                                             | 说明                                         |
+| ------ | ------------------------------------------------ | -------------------------------------------- |
+| GET    | `/api/v1/health`                                 | 健康检查                                     |
+| POST   | `/api/v1/documents`                              | 上传 PDF（multipart `file`）                 |
+| GET    | `/api/v1/documents`                              | 分页列出文档                                 |
+| GET    | `/api/v1/documents/{document_id}`                | 查询单个文档元数据                           |
+| DELETE | `/api/v1/documents/{document_id}`                | 删除文档元数据与存储文件                     |
+| POST   | `/api/v1/documents/{document_id}/anchors/search` | 检索证据文字并返回全部命中位置               |
+| POST   | `/api/v1/documents/{document_id}/index`          | 建立或重建页面文本与 Chunk 索引（M1-03A）    |
+| POST   | `/api/v1/retrieval/search`                       | 在已索引 Chunk 中检索并返回来源偏移（M1-02） |
+| GET    | `/api/v1/documents/{document_id}/file`           | 读取已上传 PDF 原始字节（内联展示）          |
+
+索引入口 `POST /documents/{document_id}/index` 只调用 `DocumentIndexService.index_document()`：PDF 哈希、文本抽取、Chunk 切分、来源校验与单事务原子替换旧索引均不在路由层重写。重复调用会重建索引，相同 PDF 与配置下最终 Chunk 集合一致，不是缓存命中；重建失败时保留原索引。
 
 搜索请求：
 

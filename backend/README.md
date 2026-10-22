@@ -35,6 +35,8 @@ uv lock --check
 | GET    | `/api/v1/documents/{document_id}`                | 查询单个文档元数据                          |
 | DELETE | `/api/v1/documents/{document_id}`                | 删除文档元数据与存储文件                    |
 | POST   | `/api/v1/documents/{document_id}/anchors/search` | 检索证据文字并返回全部命中位置              |
+| POST   | `/api/v1/documents/{document_id}/index`          | 建立或重建可追溯的页面文本与 Chunk 索引     |
+| POST   | `/api/v1/retrieval/search`                       | 在已索引 Chunk 中检索并返回来源偏移         |
 | GET    | `/api/v1/documents/{document_id}/file`           | 读取已上传 PDF 原始字节（inline）           |
 
 ### 证据搜索
@@ -91,6 +93,53 @@ Content-Type: application/json
 - `bbox`：所有行矩形的派生外包框，不能替代 `rects`。
 - 零命中返回 HTTP 200，`total` 为 `0`，`results` 为 `[]`。
 
+### 文档索引
+
+```http
+POST /api/v1/documents/{document_id}/index
+```
+
+无请求体。第一版始终使用服务默认切分参数（`max_chars=800`、`overlap_chars=0`）。
+
+响应（HTTP 200）：
+
+```json
+{
+  "document_id": "6f1c9e2a-1b2c-4d5e-8f90-123456789abc",
+  "fingerprint": "0f1c...9a4d",
+  "page_count": 3,
+  "chunk_count": 3,
+  "filtered_chunk_count": 0,
+  "indexed_at": "2026-10-22T07:41:00.123456Z"
+}
+```
+
+- 该接口只调用 `DocumentIndexService.index_document()`；PDF 解析、切分、指纹计算与旧索引清理都不在路由层重写。
+- 每次调用都会重新解析 PDF 并重建索引。相同 PDF 与相同配置下最终 Chunk 集合一致，不会出现重复行；这不是缓存命中。
+- 索引在单个 SQLite 事务内原子替换：解析、切分或写入失败时，原有索引保持不变。
+- 索引只是“已建立”（`indexed`），不代表已经校验过与当前 PDF 一致（`current`）；本版本不提供索引有效性检查接口。
+- 文档删除时，`document_page_texts`、`document_chunks`、`document_index_metadata` 由外键级联清理。
+
+### Chunk 检索
+
+```http
+POST /api/v1/retrieval/search
+Content-Type: application/json
+
+{
+  "query": "The proposed method",
+  "document_id": "6f1c9e2a-1b2c-4d5e-8f90-123456789abc",
+  "match_case": true,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+- `document_id` 可省略；省略时检索所有已索引文档。
+- 响应返回 `total`、分页参数与命中列表。每个命中包含 `chunk_id`、`page_index`、`page_number`、`chunk_index`、`start_offset`、`end_offset`、`match_start`、`match_end`、`hit_text`、`chunk_text`、`extraction_version`。
+- `start_offset` / `end_offset` 是 Chunk 在页面文本中的 Python 字符串偏移；`match_start` / `match_end` 是命中在同一页面文本中的偏移。它们都不是 PDF 坐标。
+- 检索只读已持久化的 Chunk，不解析 PDF、不建立索引、不写数据库。
+
 ### 文件读取
 
 ```http
@@ -127,6 +176,9 @@ curl -OJ http://127.0.0.1:8000/api/v1/documents/<document_id>/file
 | `query` 缺失、类型错误、空或纯空白 | 422    | FastAPI 校验错误                             |
 | 已登记文档的 PDF 缺失或不可读      | 500    | `Stored PDF is missing or unreadable`        |
 | 已登记文档的 PDF 无法解析          | 500    | `Stored PDF could not be searched`           |
+| 索引时 PDF 缺失或不可读            | 500    | `Stored PDF is missing or unreadable`        |
+| 索引时 PDF 无法抽取文本            | 500    | `Stored PDF could not be indexed`            |
+| 索引写入 SQLite 失败               | 500    | `Document index could not be stored`         |
 
 错误响应不会包含服务器绝对路径、存储目录或内部堆栈。
 
