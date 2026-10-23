@@ -1,7 +1,11 @@
 import type {
   AnchorSearchResponse,
+  ChunkRetrievalResponse,
+  DocumentIndexResponse,
   DocumentListResponse,
   DocumentSummary,
+  EvidenceLocateResponse,
+  EvidenceSpanRequest,
 } from "./types";
 
 const API_BASE = "/api/v1";
@@ -58,7 +62,10 @@ async function errorFromResponse(response: Response): Promise<ApiError> {
   } catch {
     // A malformed error body must not mask the HTTP status.
   }
-  return new ApiError(detail ?? `请求失败（HTTP ${response.status}）`, response.status);
+  return new ApiError(
+    detail ?? `请求失败（HTTP ${response.status}）`,
+    response.status
+  );
 }
 
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
@@ -66,7 +73,8 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(input, init);
   } catch (error) {
-    const reason = error instanceof Error && error.message ? `：${error.message}` : "";
+    const reason =
+      error instanceof Error && error.message ? `：${error.message}` : "";
     throw new ApiError(`无法连接后端服务${reason}`, 0);
   }
 
@@ -88,11 +96,15 @@ export class RagAnchorApi {
       limit: String(limit),
       offset: String(offset),
     });
-    return request<DocumentListResponse>(`${API_BASE}/documents?${params.toString()}`);
+    return request<DocumentListResponse>(
+      `${API_BASE}/documents?${params.toString()}`
+    );
   }
 
   getDocument(documentId: string): Promise<DocumentSummary> {
-    return request<DocumentSummary>(`${API_BASE}/documents/${encodeURIComponent(documentId)}`);
+    return request<DocumentSummary>(
+      `${API_BASE}/documents/${encodeURIComponent(documentId)}`
+    );
   }
 
   uploadDocument(file: File): Promise<DocumentSummary> {
@@ -108,7 +120,7 @@ export class RagAnchorApi {
   searchAnchors(
     documentId: string,
     query: string,
-    matchCase = true,
+    matchCase = true
   ): Promise<AnchorSearchResponse> {
     return request<AnchorSearchResponse>(
       `${API_BASE}/documents/${encodeURIComponent(documentId)}/anchors/search`,
@@ -116,7 +128,48 @@ export class RagAnchorApi {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query, match_case: matchCase }),
-      },
+      }
+    );
+  }
+
+  indexDocument(documentId: string): Promise<DocumentIndexResponse> {
+    return request<DocumentIndexResponse>(
+      `${API_BASE}/documents/${encodeURIComponent(documentId)}/index`,
+      { method: "POST" }
+    );
+  }
+
+  searchChunks(options: {
+    query: string;
+    documentId: string;
+    matchCase?: boolean;
+    limit?: number;
+    offset?: number;
+  }): Promise<ChunkRetrievalResponse> {
+    return request<ChunkRetrievalResponse>(`${API_BASE}/retrieval/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: options.query,
+        document_id: options.documentId,
+        match_case: options.matchCase ?? true,
+        limit: options.limit ?? 10,
+        offset: options.offset ?? 0,
+      }),
+    });
+  }
+
+  locateEvidence(
+    documentId: string,
+    items: readonly EvidenceSpanRequest[]
+  ): Promise<EvidenceLocateResponse> {
+    return request<EvidenceLocateResponse>(
+      `${API_BASE}/documents/${encodeURIComponent(documentId)}/evidence/locate`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      }
     );
   }
 
@@ -124,10 +177,11 @@ export class RagAnchorApi {
     let response: Response;
     try {
       response = await fetch(
-        `${API_BASE}/documents/${encodeURIComponent(documentId)}/file`,
+        `${API_BASE}/documents/${encodeURIComponent(documentId)}/file`
       );
     } catch (error) {
-      const reason = error instanceof Error && error.message ? `：${error.message}` : "";
+      const reason =
+        error instanceof Error && error.message ? `：${error.message}` : "";
       throw new ApiError(`无法连接后端服务${reason}`, 0);
     }
 
@@ -139,8 +193,11 @@ export class RagAnchorApi {
   }
 
   async deleteDocument(documentId: string): Promise<void> {
-    await request<void>(`${API_BASE}/documents/${encodeURIComponent(documentId)}`, {
-      method: "DELETE",
-    });
+    await request<void>(
+      `${API_BASE}/documents/${encodeURIComponent(documentId)}`,
+      {
+        method: "DELETE",
+      }
+    );
   }
 }

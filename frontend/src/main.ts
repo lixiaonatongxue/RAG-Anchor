@@ -1,8 +1,28 @@
 import { ApiError, RagAnchorApi } from "./api/client";
-import type { AnchorHit, DocumentSummary } from "./api/types";
+import type {
+  AnchorHit,
+  DocumentIndexResponse,
+  DocumentSummary,
+  RetrievalHit,
+} from "./api/types";
 import { paintHighlights } from "./highlight/renderer";
+import {
+  anchorSelection,
+  emptySelection,
+  evidenceSelection,
+  selectPageHighlights,
+} from "./highlight/selection";
+import type { HighlightSelection } from "./highlight/selection";
 import { PdfViewer } from "./pdf/viewer";
 import type { ViewerState } from "./pdf/viewer";
+import {
+  CHUNK_PAGE_SIZE,
+  chunkEmptyMessage,
+  computeChunkPage,
+  evidenceErrorMessage,
+  toEvidenceSpan,
+} from "./retrieval/chunk";
+import { createRequestGate } from "./ui/request";
 import {
   centerTargetsWhenReady,
   createScrollRequestGate,
@@ -31,6 +51,19 @@ const uploadStatus = byId<HTMLParagraphElement>("upload-status");
 
 const documentCount = byId<HTMLSpanElement>("document-count");
 const documentList = byId<HTMLDivElement>("document-list");
+
+const indexStatus = byId<HTMLSpanElement>("index-status");
+const indexButton = byId<HTMLButtonElement>("index-button");
+const indexDetail = byId<HTMLSpanElement>("index-detail");
+const chunkForm = byId<HTMLFormElement>("chunk-form");
+const chunkInput = byId<HTMLTextAreaElement>("chunk-input");
+const chunkMatchCase = byId<HTMLInputElement>("chunk-match-case");
+const chunkSearchButton = byId<HTMLButtonElement>("chunk-search-button");
+const chunkHint = byId<HTMLParagraphElement>("chunk-hint");
+const chunkPosition = byId<HTMLSpanElement>("chunk-position");
+const chunkPrev = byId<HTMLButtonElement>("chunk-prev");
+const chunkNext = byId<HTMLButtonElement>("chunk-next");
+const chunkResults = byId<HTMLDivElement>("chunk-results");
 
 const searchForm = byId<HTMLFormElement>("search-form");
 const searchInput = byId<HTMLTextAreaElement>("search-input");
@@ -84,6 +117,13 @@ let totalDocuments = 0;
 let selectedId: string | null = null;
 let hits: AnchorHit[] = [];
 let activeHitIndex = -1;
+/**
+ * The single highlight input for the overlay. Anchor search and chunk evidence
+ * both publish into this value, so there is exactly one coordinate conversion
+ * path (`highlight/renderer.ts`). A newer selection always replaces the old
+ * one instead of being drawn next to it.
+ */
+let highlightSelection: HighlightSelection = emptySelection();
 let hasSearched = false;
 let searching = false;
 let searchInFlight = false;
@@ -91,6 +131,22 @@ let uploadInFlight = false;
 let selectionToken = 0;
 let searchToken = 0;
 const scrollGate = createScrollRequestGate();
+
+/* ---------- Index and chunk retrieval state ---------- */
+
+let indexedDocumentId: string | null = null;
+let indexStats: DocumentIndexResponse | null = null;
+let indexInFlight = false;
+
+let chunkHits: RetrievalHit[] = [];
+let chunkTotal = 0;
+let chunkOffset = 0;
+let chunkActiveIndex = -1;
+let chunkHasSearched = false;
+let chunkSearching = false;
+let chunkSearchInFlight = false;
+const chunkGate = createRequestGate();
+const locateGate = createRequestGate();
 
 const viewer = new PdfViewer(
   {
@@ -209,17 +265,10 @@ function handleViewerState(state: ViewerState): void {
 }
 
 function handleRender(pageNumber: number, viewport: PageViewport): void {
-  const pageHits = hits.filter((hit) => hit.page_number === pageNumber);
-  let activeLocalIndex = -1;
-
-  if (activeHitIndex >= 0) {
-    const activeHit = hits[activeHitIndex];
-    if (activeHit && activeHit.page_number === pageNumber) {
-      activeLocalIndex = pageHits.indexOf(activeHit);
-    }
-  }
-
-  paintHighlights(highlightLayer, pageHits, viewport, activeLocalIndex);
+  // Switching pages must not leave a highlight from another page on the
+  // overlay, and a zoom re-render must map the stored rectangles again.
+  const page = selectPageHighlights(highlightSelection, pageNumber);
+  paintHighlights(highlightLayer, page.hits, viewport, page.activeLocalIndex);
 }
 
 function showViewerError(message: string): void {
@@ -353,6 +402,8 @@ async function selectDocument(documentId: string): Promise<void> {
   selectedId = documentId;
   renderDocuments();
   resetSearchResults();
+  resetChunkState();
+  resetIndexState();
   updateSearchAvailability();
 
   viewerTitle.textContent = document.filename;
@@ -405,6 +456,8 @@ async function clearSelection(): Promise<void> {
   selectionToken += 1;
   selectedId = null;
   resetSearchResults();
+  resetChunkState();
+  resetIndexState();
   updateSearchAvailability();
   renderDocuments();
 
@@ -534,11 +587,14 @@ function updateSearchAvailability(): void {
   }
 
   updateSearchButton();
+  updateIndexAvailability();
+  updateChunkAvailability();
 }
 
 function resetSearchResults(): void {
   hits = [];
   activeHitIndex = -1;
+  highlightSelection = emptySelection();
   hasSearched = false;
   searching = false;
   searchToken += 1;
@@ -547,6 +603,283 @@ function resetSearchResults(): void {
   highlightLayer.replaceChildren();
   renderResults();
   updateSearchAvailability();
+}
+
+/* ---------- Index and chunk retrieval ---------- */
+
+function resetIndexState(): void {
+  indexedDocumentId = null;
+  indexStats = null;
+  indexInFlight = false;
+  indexStatus.textContent = "未索引";
+}
+
+function resetChunkState(): void {
+  chunkGate.begin();
+  locateGate.begin();
+  chunkHits = [];
+  chunkTotal = 0;
+  chunkOffset = 0;
+  chunkActiveIndex = -1;
+  chunkHasSearched = false;
+  chunkSearching = false;
+  chunkSearchInFlight = false;
+  chunkPosition.textContent = "0 / 0";
+  chunkHint.className = "search-hint";
+  chunkHint.textContent = selectedId
+    ? "尚未建立索引，先建立索引后再检索。"
+    : "请先选择一个文档。";
+  chunkPrev.disabled = true;
+  chunkNext.disabled = true;
+  chunkSearchButton.disabled = true;
+  renderChunkResults();
+}
+
+function updateIndexAvailability(): void {
+  const document = documents.find((item) => item.document_id === selectedId);
+  if (!document) {
+    indexButton.disabled = true;
+    indexButton.textContent = "建立索引";
+    indexDetail.textContent = "选择一个文档后可建立索引。";
+    return;
+  }
+  if (indexInFlight) {
+    indexButton.disabled = true;
+    indexButton.textContent = "索引中…";
+    indexDetail.textContent = "正在建立索引，请稍候。";
+    return;
+  }
+  if (indexedDocumentId === document.document_id && indexStats) {
+    indexButton.disabled = false;
+    indexButton.textContent = "重新索引";
+    indexDetail.textContent = `已索引 ${indexStats.page_count} 页 · ${indexStats.chunk_count} 个 Chunk。`;
+    return;
+  }
+  indexButton.disabled = false;
+  indexButton.textContent = "建立索引";
+  indexDetail.textContent = "建立索引后可进行 Chunk 字面检索。";
+}
+
+function updateChunkAvailability(): void {
+  const document = documents.find((item) => item.document_id === selectedId);
+  const indexed = indexedDocumentId === selectedId;
+  const canSearch = Boolean(document) && indexed && !chunkSearchInFlight;
+  chunkSearchButton.disabled =
+    !canSearch || chunkInput.value.trim().length === 0;
+}
+
+async function performIndex(): Promise<void> {
+  const documentId = selectedId;
+  if (!documentId || indexInFlight) {
+    return;
+  }
+  indexInFlight = true;
+  indexStatus.textContent = "索引中";
+  updateIndexAvailability();
+
+  try {
+    const stats = await api.indexDocument(documentId);
+    if (selectedId !== documentId) {
+      return;
+    }
+    indexedDocumentId = documentId;
+    indexStats = stats;
+    indexStatus.textContent = "已索引";
+    showToast(
+      `已建立索引：${stats.page_count} 页 · ${stats.chunk_count} 个 Chunk。`,
+      "success"
+    );
+  } catch (error) {
+    if (selectedId !== documentId) {
+      return;
+    }
+    indexStatus.textContent = "索引失败";
+    showToast(friendlyError(error), "error");
+  } finally {
+    if (selectedId === documentId) {
+      indexInFlight = false;
+      updateIndexAvailability();
+      updateChunkAvailability();
+    }
+  }
+}
+
+function renderChunkResults(): void {
+  chunkResults.replaceChildren();
+
+  if (chunkHits.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "list-empty";
+    empty.textContent = chunkEmptyMessage({
+      searching: chunkSearching,
+      hasSearched: chunkHasSearched,
+    });
+    chunkResults.append(empty);
+  } else {
+    chunkHits.forEach((hit, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `result-item${
+        index === chunkActiveIndex ? " is-active" : ""
+      }`;
+      button.setAttribute(
+        "aria-current",
+        index === chunkActiveIndex ? "true" : "false"
+      );
+
+      const topLine = document.createElement("span");
+      topLine.className = "result-topline";
+
+      const pagePill = document.createElement("span");
+      pagePill.className = "page-pill";
+      pagePill.textContent = `第 ${hit.page_number} 页`;
+
+      const charRange = document.createElement("span");
+      charRange.className = "result-char";
+      charRange.textContent = `字符 ${hit.match_start}–${hit.match_end}`;
+
+      topLine.append(pagePill, charRange);
+
+      const text = document.createElement("p");
+      text.className = "result-text";
+      text.textContent = snippet(hit.hit_text);
+
+      button.append(topLine, text);
+      button.addEventListener("click", () => {
+        void locateChunkHit(index);
+      });
+      chunkResults.append(button);
+    });
+  }
+
+  const page = computeChunkPage(chunkTotal, chunkOffset, chunkHits.length);
+  chunkPosition.textContent = page.label;
+  chunkPrev.disabled = !page.hasPrevious || chunkSearchInFlight;
+  chunkNext.disabled = !page.hasNext || chunkSearchInFlight;
+}
+
+async function locateChunkHit(index: number): Promise<void> {
+  const hit = chunkHits[index];
+  const documentId = selectedId;
+  if (!hit || !documentId) {
+    return;
+  }
+
+  chunkActiveIndex = index;
+  renderChunkResults();
+
+  const requestToken = locateGate.begin();
+  try {
+    const response = await api.locateEvidence(documentId, [
+      toEvidenceSpan(hit),
+    ]);
+    if (!locateGate.isCurrent(requestToken) || selectedId !== documentId) {
+      return;
+    }
+    const located = response.results[0];
+    if (!located) {
+      chunkHint.className = "search-hint is-error";
+      chunkHint.textContent = "服务端没有返回定位结果。";
+      return;
+    }
+
+    highlightSelection = evidenceSelection(located);
+    await viewer.setPage(located.page_number);
+
+    const scrollToken = scrollGate.begin();
+    await centerActiveHighlight(scrollToken);
+  } catch (error) {
+    if (!locateGate.isCurrent(requestToken)) {
+      return;
+    }
+    const status = error instanceof ApiError ? error.status : 0;
+    const message = evidenceErrorMessage(status, friendlyError(error));
+    chunkHint.className = "search-hint is-error";
+    chunkHint.textContent = message;
+    showToast(message, "error");
+  }
+}
+
+async function runChunkSearch(offset: number): Promise<void> {
+  const documentId = selectedId;
+  if (!documentId || chunkSearchInFlight) {
+    return;
+  }
+  if (indexedDocumentId !== documentId) {
+    chunkHint.className = "search-hint is-error";
+    chunkHint.textContent = "请先建立索引。";
+    return;
+  }
+  const query = chunkInput.value.trim();
+  if (!query) {
+    chunkHint.className = "search-hint is-error";
+    chunkHint.textContent = "请输入要检索的文字。";
+    chunkInput.focus();
+    return;
+  }
+
+  const token = chunkGate.begin();
+  chunkSearchInFlight = true;
+  chunkSearching = true;
+  chunkHasSearched = false;
+  chunkHits = [];
+  chunkOffset = offset;
+  chunkActiveIndex = -1;
+  renderChunkResults();
+  updateChunkAvailability();
+
+  try {
+    const response = await api.searchChunks({
+      query,
+      documentId,
+      matchCase: chunkMatchCase.checked,
+      limit: CHUNK_PAGE_SIZE,
+      offset,
+    });
+    if (!chunkGate.isCurrent(token) || selectedId !== documentId) {
+      return;
+    }
+    chunkSearching = false;
+    chunkHasSearched = true;
+    chunkHits = response.results;
+    chunkTotal = response.total;
+    chunkOffset = response.offset;
+    chunkActiveIndex = chunkHits.length > 0 ? 0 : -1;
+    renderChunkResults();
+    chunkHint.className = "search-hint is-info";
+    chunkHint.textContent = `找到 ${
+      response.total
+    } 个匹配的 Chunk，共 ${Math.ceil(response.total / CHUNK_PAGE_SIZE)} 页。`;
+  } catch (error) {
+    if (!chunkGate.isCurrent(token)) {
+      return;
+    }
+    chunkSearching = false;
+    chunkHasSearched = false;
+    chunkHits = [];
+    chunkTotal = 0;
+    chunkOffset = 0;
+    chunkActiveIndex = -1;
+    renderChunkResults();
+    chunkHint.className = "search-hint is-error";
+    chunkHint.textContent = friendlyError(error);
+    showToast(friendlyError(error), "error");
+  } finally {
+    if (chunkGate.isCurrent(token)) {
+      chunkSearchInFlight = false;
+      chunkSearching = false;
+      updateChunkAvailability();
+    }
+  }
+}
+
+function performChunkSearch(event: SubmitEvent): void {
+  event.preventDefault();
+  void runChunkSearch(0);
+}
+
+function goChunkPage(offset: number): void {
+  void runChunkSearch(offset);
 }
 
 function renderResults(): void {
@@ -619,6 +952,7 @@ async function activateHit(index: number): Promise<void> {
   }
 
   activeHitIndex = index;
+  highlightSelection = anchorSelection(hits, index);
   renderResults();
 
   const hit = hits[index];
@@ -688,6 +1022,7 @@ async function performSearch(event: SubmitEvent): Promise<void> {
   hasSearched = false;
   hits = [];
   activeHitIndex = -1;
+  highlightSelection = emptySelection();
   searchButton.textContent = "搜索中…";
   updateSearchButton();
   searchHint.className = "search-hint is-info";
@@ -714,6 +1049,7 @@ async function performSearch(event: SubmitEvent): Promise<void> {
     if (hits.length === 0) {
       searchHint.className = "search-hint";
       searchHint.textContent = "没有找到匹配证据。";
+      highlightSelection = emptySelection();
       highlightLayer.replaceChildren();
     } else {
       searchHint.className = "search-hint is-info";
@@ -728,6 +1064,7 @@ async function performSearch(event: SubmitEvent): Promise<void> {
     hasSearched = false;
     hits = [];
     activeHitIndex = -1;
+    highlightSelection = emptySelection();
     renderResults();
     searchHint.className = "search-hint is-error";
     searchHint.textContent = friendlyError(error);
@@ -810,6 +1147,30 @@ searchInput.addEventListener("keydown", (event) => {
   }
 });
 
+/* ---------- Index and chunk events ---------- */
+
+indexButton.addEventListener("click", () => {
+  void performIndex();
+});
+
+chunkForm.addEventListener("submit", (event) => {
+  performChunkSearch(event);
+});
+
+chunkPrev.addEventListener("click", () => {
+  const page = computeChunkPage(chunkTotal, chunkOffset, chunkHits.length);
+  goChunkPage(page.previousOffset);
+});
+
+chunkNext.addEventListener("click", () => {
+  const page = computeChunkPage(chunkTotal, chunkOffset, chunkHits.length);
+  goChunkPage(page.nextOffset);
+});
+
+chunkInput.addEventListener("input", () => {
+  updateChunkAvailability();
+});
+
 /* ---------- Bootstrap ---------- */
 
 window.addEventListener("beforeunload", () => {
@@ -818,5 +1179,6 @@ window.addEventListener("beforeunload", () => {
 
 documentCount.textContent = "0";
 renderResults();
+renderChunkResults();
 updateSearchAvailability();
 void loadDocuments();

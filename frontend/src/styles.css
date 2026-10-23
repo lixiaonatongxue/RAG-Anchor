@@ -254,7 +254,8 @@ button:disabled {
   background: linear-gradient(180deg, #fbfdff, var(--surface-muted));
   text-align: center;
   cursor: pointer;
-  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+  transition: border-color 0.18s ease, background 0.18s ease,
+    transform 0.18s ease;
 }
 
 .upload-zone:hover {
@@ -339,7 +340,8 @@ button:disabled {
   border-radius: var(--radius-sm);
   background: var(--surface);
   cursor: pointer;
-  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+  transition: border-color 0.16s ease, background 0.16s ease,
+    box-shadow 0.16s ease;
 }
 
 .document-card::before {
@@ -677,6 +679,19 @@ button:disabled {
   background: var(--danger-soft);
 }
 
+/* ---------- Index & Chunk ---------- */
+
+.index-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 11px;
+}
+
+.index-row .panel-hint {
+  line-height: 1.5;
+}
+
 /* ---------- Viewer ---------- */
 
 .viewer-pane {
@@ -842,7 +857,10 @@ button:disabled {
   overflow: auto;
   padding: 28px;
   background-color: var(--surface-sunken);
-  background-image: radial-gradient(rgba(148, 163, 184, 0.32) 1px, transparent 1px);
+  background-image: radial-gradient(
+    rgba(148, 163, 184, 0.32) 1px,
+    transparent 1px
+  );
   background-size: 18px 18px;
 }
 
@@ -850,7 +868,8 @@ button:disabled {
   position: relative;
   margin: 0 auto;
   background: #fff;
-  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.16), 0 2px 6px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.16),
+    0 2px 6px rgba(15, 23, 42, 0.08);
   line-height: 0;
   animation: page-in 0.24s ease both;
 }

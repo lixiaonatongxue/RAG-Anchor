@@ -1,4 +1,4 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
@@ -14,11 +14,19 @@
       <header class="app-header">
         <div class="brand">
           <span class="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+            >
               <path d="M12 3v7" stroke-linecap="round" />
               <circle cx="12" cy="12" r="2.4" />
               <path d="M12 14.4V21" stroke-linecap="round" />
-              <path d="M6 8.5a7.2 7.2 0 0 0-2.4 5.4A8.4 8.4 0 0 0 12 22a8.4 8.4 0 0 0 8.4-8.1A7.2 7.2 0 0 0 18 8.5" stroke-linecap="round" />
+              <path
+                d="M6 8.5a7.2 7.2 0 0 0-2.4 5.4A8.4 8.4 0 0 0 12 22a8.4 8.4 0 0 0 8.4-8.1A7.2 7.2 0 0 0 18 8.5"
+                stroke-linecap="round"
+              />
             </svg>
           </span>
           <div class="brand-text">
@@ -47,16 +55,33 @@
                 hidden
               />
               <span class="upload-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                >
                   <path d="M12 16V4" stroke-linecap="round" />
-                  <path d="m7.5 8.5 4.5-4.5 4.5 4.5" stroke-linecap="round" stroke-linejoin="round" />
-                  <path d="M5 15v3.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V15" stroke-linecap="round" />
+                  <path
+                    d="m7.5 8.5 4.5-4.5 4.5 4.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                  <path
+                    d="M5 15v3.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V15"
+                    stroke-linecap="round"
+                  />
                 </svg>
               </span>
               <span class="upload-title">拖放 PDF 到这里，或点击选择</span>
               <span class="upload-sub">文件仅保存在本机后端</span>
             </label>
-            <p class="upload-status" id="upload-status" role="status" aria-live="polite"></p>
+            <p
+              class="upload-status"
+              id="upload-status"
+              role="status"
+              aria-live="polite"
+            ></p>
           </section>
 
           <section class="panel documents-panel">
@@ -65,6 +90,100 @@
               <span class="count-badge" id="document-count">0</span>
             </div>
             <div class="document-list" id="document-list"></div>
+          </section>
+
+          <section class="panel chunk-panel" aria-label="索引与 Chunk 检索">
+            <div class="panel-heading">
+              <h2>Chunk 检索</h2>
+              <span class="panel-hint" id="index-status">未索引</span>
+            </div>
+            <div class="index-row">
+              <button
+                class="ghost-button"
+                id="index-button"
+                type="button"
+                disabled
+              >
+                建立索引
+              </button>
+              <span class="panel-hint" id="index-detail"
+                >选择一个文档后可建立索引。</span
+              >
+            </div>
+            <form class="search-form" id="chunk-form">
+              <label class="field-label" for="chunk-input"
+                >字面匹配（非语义检索）</label
+              >
+              <textarea
+                id="chunk-input"
+                rows="2"
+                placeholder="输入字面文字，例如：quick"
+                spellcheck="false"
+              ></textarea>
+              <div class="search-controls">
+                <label class="checkbox">
+                  <input id="chunk-match-case" type="checkbox" checked />
+                  <span>区分大小写</span>
+                </label>
+                <button
+                  class="primary-button"
+                  id="chunk-search-button"
+                  type="submit"
+                  disabled
+                >
+                  检索
+                </button>
+              </div>
+            </form>
+            <p class="search-hint" id="chunk-hint">请先选择一个文档。</p>
+            <div class="results-toolbar">
+              <span id="chunk-position">0 / 0</span>
+              <div class="hit-nav">
+                <button
+                  class="icon-button"
+                  id="chunk-prev"
+                  type="button"
+                  title="上一页结果"
+                  aria-label="上一页结果"
+                  disabled
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.9"
+                  >
+                    <path
+                      d="m6 14 6-6 6 6"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+                <button
+                  class="icon-button"
+                  id="chunk-next"
+                  type="button"
+                  title="下一页结果"
+                  aria-label="下一页结果"
+                  disabled
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.9"
+                  >
+                    <path
+                      d="m6 10 6 6 6-6"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div class="results-list chunk-results" id="chunk-results"></div>
           </section>
 
           <section class="panel search-panel">
@@ -84,7 +203,12 @@
                   <input id="match-case" type="checkbox" checked />
                   <span>区分大小写</span>
                 </label>
-                <button class="primary-button" id="search-button" type="submit" disabled>
+                <button
+                  class="primary-button"
+                  id="search-button"
+                  type="submit"
+                  disabled
+                >
                   搜索
                 </button>
               </div>
@@ -108,8 +232,17 @@
                   aria-label="上一命中"
                   disabled
                 >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                    <path d="m6 14 6-6 6 6" stroke-linecap="round" stroke-linejoin="round" />
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.9"
+                  >
+                    <path
+                      d="m6 14 6-6 6 6"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
                   </svg>
                 </button>
                 <button
@@ -120,8 +253,17 @@
                   aria-label="下一命中"
                   disabled
                 >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                    <path d="m6 10 6 6 6-6" stroke-linecap="round" stroke-linejoin="round" />
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.9"
+                  >
+                    <path
+                      d="m6 10 6 6 6-6"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
                   </svg>
                 </button>
               </div>
@@ -147,8 +289,17 @@
                   aria-label="上一页"
                   disabled
                 >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                    <path d="m14 6-6 6 6 6" stroke-linecap="round" stroke-linejoin="round" />
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.9"
+                  >
+                    <path
+                      d="m14 6-6 6 6 6"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
                   </svg>
                 </button>
                 <input
@@ -169,8 +320,17 @@
                   aria-label="下一页"
                   disabled
                 >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                    <path d="m10 6 6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.9"
+                  >
+                    <path
+                      d="m10 6 6 6-6 6"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
                   </svg>
                 </button>
               </div>
@@ -184,7 +344,12 @@
                   aria-label="缩小"
                   disabled
                 >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.9"
+                  >
                     <path d="M6 12h12" stroke-linecap="round" />
                   </svg>
                 </button>
@@ -197,7 +362,12 @@
                   aria-label="放大"
                   disabled
                 >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.9"
+                  >
                     <path d="M12 6v12M6 12h12" stroke-linecap="round" />
                   </svg>
                 </button>
@@ -217,16 +387,26 @@
           <div class="viewer-stage" id="viewer-stage">
             <div class="viewer-empty" id="viewer-empty">
               <span class="empty-illustration" aria-hidden="true">
-                <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="1.5">
+                <svg
+                  viewBox="0 0 64 64"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                >
                   <path d="M16 8h22l10 10v38H16V8Z" stroke-linejoin="round" />
                   <path d="M38 8v10h10" stroke-linejoin="round" />
-                  <path d="M23 30h18M23 38h18M23 46h11" stroke-linecap="round" />
+                  <path
+                    d="M23 30h18M23 38h18M23 46h11"
+                    stroke-linecap="round"
+                  />
                   <circle cx="41" cy="46" r="7" fill="var(--surface)" />
                   <path d="m46 51 6 6" stroke-linecap="round" />
                 </svg>
               </span>
               <p class="empty-title">等待载入 PDF</p>
-              <p class="empty-copy">选择左侧文档后，页面会在这里渲染；搜索命中将以高亮覆盖在原文上。</p>
+              <p class="empty-copy">
+                选择左侧文档后，页面会在这里渲染；搜索命中将以高亮覆盖在原文上。
+              </p>
             </div>
 
             <div class="viewer-loading" id="viewer-loading" hidden>
@@ -241,14 +421,23 @@
 
             <div class="page-shell" id="page-shell" hidden>
               <canvas id="pdf-canvas"></canvas>
-              <div class="highlight-layer" id="highlight-layer" aria-hidden="true"></div>
+              <div
+                class="highlight-layer"
+                id="highlight-layer"
+                aria-hidden="true"
+              ></div>
             </div>
           </div>
         </section>
       </main>
     </div>
 
-    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="false"></div>
+    <div
+      class="toast-region"
+      id="toast-region"
+      aria-live="polite"
+      aria-atomic="false"
+    ></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
