@@ -120,20 +120,7 @@ def _search_page(
     query: str,
     match_case: bool,
 ) -> list[AnchorHit]:
-    cropbox_values = page.get_cropbox()
-    cropbox: tuple[float, float, float, float] = (
-        float(cropbox_values[0]),
-        float(cropbox_values[1]),
-        float(cropbox_values[2]),
-        float(cropbox_values[3]),
-    )
-    descriptor = PageDescriptor(
-        page_index=page_index,
-        width_pt=cropbox[2] - cropbox[0],
-        height_pt=cropbox[3] - cropbox[1],
-        rotation=int(page.get_rotation()),
-        cropbox=cropbox,
-    )
+    descriptor = build_page_descriptor(page, page_index)
 
     searcher = text_page.search(query, match_case=match_case)
     page_hits: list[AnchorHit] = []
@@ -150,7 +137,7 @@ def _search_page(
                     matched_text=text_page.get_text_range(char_start, char_count),
                     char_start=char_start,
                     char_count=char_count,
-                    rects=tuple(_match_rects(text_page, char_start, char_count)),
+                    rects=tuple(match_rects(text_page, char_start, char_count)),
                     page=descriptor,
                 )
             )
@@ -160,7 +147,32 @@ def _search_page(
     return page_hits
 
 
-def _match_rects(
+def build_page_descriptor(page: PdfPage, page_index: int) -> PageDescriptor:
+    """Describe one page's geometry for interpreting hit rectangles.
+
+    ``width_pt`` / ``height_pt`` are the *unrotated* CropBox dimensions and
+    ``cropbox`` is ``(left, bottom, right, top)`` in absolute PDF user space.
+    Hit rectangles are also absolute user space, so a non-zero CropBox origin
+    is not subtracted from them and the page rotation is reported separately
+    instead of being baked into any rectangle.
+    """
+    cropbox_values = page.get_cropbox()
+    cropbox: tuple[float, float, float, float] = (
+        float(cropbox_values[0]),
+        float(cropbox_values[1]),
+        float(cropbox_values[2]),
+        float(cropbox_values[3]),
+    )
+    return PageDescriptor(
+        page_index=page_index,
+        width_pt=cropbox[2] - cropbox[0],
+        height_pt=cropbox[3] - cropbox[1],
+        rotation=int(page.get_rotation()),
+        cropbox=cropbox,
+    )
+
+
+def match_rects(
     text_page: PdfTextPage,
     char_start: int,
     char_count: int,

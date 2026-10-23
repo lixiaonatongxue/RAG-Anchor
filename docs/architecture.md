@@ -28,12 +28,12 @@ PDF + query
 
 独立 uv 项目，FastAPI 应用。当前分层：
 
-| 层          | 职责                                                                                      | 当前状态                                                                                                                                    |
-| ----------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api/`      | HTTP 路由、请求/响应模型                                                                  | health、文档管理（M0-04A）、证据搜索（M0-04B）、文件读取（M0-05A）、索引入口（M1-03A）、Chunk 检索（M1-02）                                 |
-| `domain/`   | 与框架无关的领域模型（`AnchorHit`、`PdfRect`、`PageDescriptor`、`PageText`、`TextChunk`） | M0-03 已实现 `PdfRect` / `AnchorHit` / `PageDescriptor`；M1-01 已实现 `PageText` / `TextChunk`                                              |
-| `services/` | PDF 解析、文本抽取与切分、索引、检索、文档管理                                            | M0-03 `search_anchors`；M0-04A `DocumentService`；M1-01 文本抽取与 Chunk 切分；M1-02 `ChunkRetrievalService`；M1-03A `DocumentIndexService` |
-| `infra/`    | 本地文件存储、SQLite 元数据仓储                                                           | M0-04A `DocumentRepository`；M1-01 新增页面文本、Chunk 与索引元数据表                                                                       |
+| 层          | 职责                                                                                      | 当前状态                                                                                                                                                                                                                            |
+| ----------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api/`      | HTTP 路由、请求/响应模型                                                                  | health、文档管理（M0-04A）、证据搜索（M0-04B）、文件读取（M0-05A）、索引入口（M1-03A）、Chunk 检索（M1-02）、精确证据定位（M1-03B）                                                                                                 |
+| `domain/`   | 与框架无关的领域模型（`AnchorHit`、`PdfRect`、`PageDescriptor`、`PageText`、`TextChunk`） | M0-03 已实现 `PdfRect` / `AnchorHit` / `PageDescriptor`；M1-01 已实现 `PageText` / `TextChunk`                                                                                                                                      |
+| `services/` | PDF 解析、文本抽取与切分、索引、检索、证据定位、文档管理                                  | M0-03 `search_anchors`；M0-04A `DocumentService`；M1-01 文本抽取与 Chunk 切分；M1-02 `ChunkRetrievalService`；M1-03A `DocumentIndexService`；M1-03B `EvidenceLocationService`（并公开复用 `match_rects` / `build_page_descriptor`） |
+| `infra/`    | 本地文件存储、SQLite 元数据仓储                                                           | M0-04A `DocumentRepository`；M1-01 新增页面文本、Chunk 与索引元数据表                                                                                                                                                               |
 
 运行时配置位于 `rag_anchor/config.py`（读取 `RAG_ANCHOR_DATA_DIR` 与 `RAG_ANCHOR_MAX_UPLOAD_BYTES`）。
 
@@ -61,17 +61,18 @@ def search_anchors(
 
 ### 2.3 HTTP 接口（M0-04A / M0-04B / M0-05A / M1-02 / M1-03A）
 
-| 方法   | 路径                                             | 说明                                         |
-| ------ | ------------------------------------------------ | -------------------------------------------- |
-| GET    | `/api/v1/health`                                 | 健康检查                                     |
-| POST   | `/api/v1/documents`                              | 上传 PDF（multipart `file`）                 |
-| GET    | `/api/v1/documents`                              | 分页列出文档                                 |
-| GET    | `/api/v1/documents/{document_id}`                | 查询单个文档元数据                           |
-| DELETE | `/api/v1/documents/{document_id}`                | 删除文档元数据与存储文件                     |
-| POST   | `/api/v1/documents/{document_id}/anchors/search` | 检索证据文字并返回全部命中位置               |
-| POST   | `/api/v1/documents/{document_id}/index`          | 建立或重建页面文本与 Chunk 索引（M1-03A）    |
-| POST   | `/api/v1/retrieval/search`                       | 在已索引 Chunk 中检索并返回来源偏移（M1-02） |
-| GET    | `/api/v1/documents/{document_id}/file`           | 读取已上传 PDF 原始字节（内联展示）          |
+| 方法   | 路径                                              | 说明                                          |
+| ------ | ------------------------------------------------- | --------------------------------------------- |
+| GET    | `/api/v1/health`                                  | 健康检查                                      |
+| POST   | `/api/v1/documents`                               | 上传 PDF（multipart `file`）                  |
+| GET    | `/api/v1/documents`                               | 分页列出文档                                  |
+| GET    | `/api/v1/documents/{document_id}`                 | 查询单个文档元数据                            |
+| DELETE | `/api/v1/documents/{document_id}`                 | 删除文档元数据与存储文件                      |
+| POST   | `/api/v1/documents/{document_id}/anchors/search`  | 检索证据文字并返回全部命中位置                |
+| POST   | `/api/v1/documents/{document_id}/index`           | 建立或重建页面文本与 Chunk 索引（M1-03A）     |
+| POST   | `/api/v1/retrieval/search`                        | 在已索引 Chunk 中检索并返回来源偏移（M1-02）  |
+| POST   | `/api/v1/documents/{document_id}/evidence/locate` | 将页面文本 span 定位为真实 PDF 几何（M1-03B） |
+| GET    | `/api/v1/documents/{document_id}/file`            | 读取已上传 PDF 原始字节（内联展示）           |
 
 索引入口 `POST /documents/{document_id}/index` 只调用 `DocumentIndexService.index_document()`：PDF 哈希、文本抽取、Chunk 切分、来源校验与单事务原子替换旧索引均不在路由层重写。重复调用会重建索引，相同 PDF 与配置下最终 Chunk 集合一致，不是缓存命中；重建失败时保留原索引。
 
@@ -153,7 +154,102 @@ Content-Disposition: inline; filename="document.pdf"
 - 读取是只读操作：不删除、不修改、不重新登记文档元数据。
 - 错误语义：元数据不存在 → 404；非法 UUID → 422；元数据存在但文件缺失或不可读 → 500，且不泄露服务器路径。
 
-### 2.5 前端（后续阶段）
+### 2.5 精确证据定位（M1-03B）
+
+M1-02 的 Chunk 检索只返回页面文本的 Python 偏移，不返回几何。M1-03B 新增独立端点：
+
+```http
+POST /api/v1/documents/{document_id}/evidence/locate
+```
+
+请求体：
+
+```json
+{
+  "items": [
+    {
+      "page_index": 0,
+      "match_start": 120,
+      "match_end": 129,
+      "hit_text": "evidence",
+      "chunk_id": "chk_..."
+    }
+  ]
+}
+```
+
+- `items` 长度 1..20，保持输入顺序，不静默去重；任一项失败则整个请求失败（all-or-nothing）。
+- `match_start` / `match_end` 是**存储页面文本的 Python `str` 偏移**，与 `POST /api/v1/retrieval/search` 返回的偏移属于同一空间；它们不是 PDFium 字符索引，也不是 PDF 坐标。
+- `hit_text` 仅用于校验，服务不会用它在 PDF 中重新搜索，也不会据此推测 occurrence。
+- `chunk_id` 可选；提供时必须是同一文档、同一页，且 span 落在该 Chunk 范围内。
+
+响应：
+
+```json
+{
+  "document_id": "6f1c9e2a-1b2c-4d5e-8f90-123456789abc",
+  "total": 1,
+  "results": [
+    {
+      "page_index": 0,
+      "page_number": 1,
+      "match_start": 120,
+      "match_end": 129,
+      "hit_text": "evidence",
+      "chunk_id": "chk_...",
+      "char_start": 121,
+      "char_count": 8,
+      "matched_text": "evidence",
+      "rects": [
+        { "left": 100.168, "bottom": 200.0, "right": 240.436, "top": 208.616 }
+      ],
+      "bbox": {
+        "left": 100.168,
+        "bottom": 200.0,
+        "right": 240.436,
+        "top": 208.616
+      },
+      "page": {
+        "page_index": 0,
+        "width_pt": 612.0,
+        "height_pt": 792.0,
+        "rotation": 0,
+        "cropbox": [0.0, 0.0, 612.0, 792.0]
+      }
+    }
+  ]
+}
+```
+
+- `char_start` / `char_count` 属于 PDFium 字符索引空间；`rects` / `bbox` 是 PDF user space 绝对坐标（points），坐标契约与 M0-03 完全一致。
+- `rects` 只来自真实 `get_charbox()`；无有效几何时明确失败，不生成近似矩形。
+
+数据流：
+
+```text
+POST /retrieval/search → (page_index, match_start, match_end, hit_text, chunk_id)
+        │
+        ▼
+POST /evidence/locate
+        │  1. 只读校验：文档存在、index_metadata 存在、extraction_version 匹配、
+        │     PDF SHA-256 匹配、涉及页文本与存储完全一致
+        │  2. 每个涉及页构建一次 offset map：segments[i] = get_text_range(i, 1)
+        │  3. Python span → PDFium [char_start, char_end)，并双向校验重建文本
+        │  4. match_rects(text_page, char_start, char_count) → 真实逐行矩形
+        ▼
+page_index / page_number / char_start / char_count / rects / bbox / page
+```
+
+实现约束：
+
+- 每个请求只打开一次 `PdfDocument`；每个涉及页面只构建一次 offset map，不按命中重复建图。
+- 非 BMP 字符在 PDFium 中可能产生空段；映射依据累积偏移定位精确边界，边界落在无法表达的字符内部时返回 409，绝不返回近似范围。
+- 若命中区间**内部**包含无法表达为空段的字符，同样返回 409：实测该字符的 `get_charbox()` 仍返回真实矩形，包含它会产生调用方未请求的高亮；位于命中之前或之后的空段由严格边界选择排除，不影响正常定位。
+- 映射完成后还会校验 `get_text_range(char_start, char_count)` 与逐字符拼接结果一致；不一致时返回 409，避免 PDFium 在整段提取时重写或丢弃字符。
+- 校验只读：不重新索引、不写数据库、不刷新 fingerprint。
+- 错误语义：404 文档不存在；422 请求项与存储文本/Chunk 不一致；409 未索引、索引与当前 PDF 不一致、span 无法精确映射或无真实几何；500 PDF 缺失或不可读。
+
+### 2.6 前端（后续阶段）
 
 - React + TypeScript + Vite + PDF.js。
 - PDF.js 负责 PDF 用户空间 → 画布像素的变换。
@@ -202,4 +298,8 @@ backend/.data/                 # 可由 RAG_ANCHOR_DATA_DIR 覆盖
 | M0-04A  | PDF 上传与文档管理 API（已完成）                                              |
 | M0-04B  | 证据搜索 API：`POST /documents/{id}/anchors/search`（已完成）                 |
 | M0-05A  | PDF 文件读取 API：`GET /documents/{id}/file`（已完成）                        |
+| M1-01   | 页面文本抽取与 Chunk 切分，持久化可追溯来源（已完成）                         |
+| M1-02   | Chunk 检索 API：`POST /retrieval/search`（已完成）                            |
+| M1-03A  | 索引入口：`POST /documents/{id}/index`（已完成）                              |
+| M1-03B  | 精确证据定位：`POST /documents/{id}/evidence/locate`（已完成）                |
 | M0-05   | 前端 PDF.js 渲染与高亮（未开始）                                              |

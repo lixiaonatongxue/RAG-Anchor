@@ -10,9 +10,11 @@ from pydantic import BaseModel
 
 from rag_anchor import __version__
 from rag_anchor.api.documents import router as documents_router
+from rag_anchor.api.evidence import router as evidence_router
 from rag_anchor.api.retrieval import router as retrieval_router
 from rag_anchor.config import Settings
 from rag_anchor.services.document_service import DocumentService
+from rag_anchor.services.evidence_service import EvidenceLocationService
 from rag_anchor.services.index_service import DocumentIndexService
 from rag_anchor.services.retrieval_service import ChunkRetrievalService
 
@@ -36,6 +38,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     document_service = DocumentService(resolved_settings)
     index_service = DocumentIndexService(document_service)
     retrieval_service = ChunkRetrievalService(document_service)
+    evidence_service = EvidenceLocationService(document_service)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -51,8 +54,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.document_service = document_service
     app.state.index_service = index_service
     app.state.retrieval_service = retrieval_service
+    app.state.evidence_service = evidence_service
     app.include_router(documents_router, prefix=API_PREFIX)
     app.include_router(retrieval_router, prefix=API_PREFIX)
+    app.include_router(evidence_router, prefix=API_PREFIX)
 
     @app.get(f"{API_PREFIX}/health", response_model=HealthResponse, tags=["system"])
     def health() -> HealthResponse:

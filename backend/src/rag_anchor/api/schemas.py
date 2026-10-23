@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from rag_anchor.services.retrieval_service import (
     DEFAULT_RETRIEVAL_LIMIT,
@@ -177,3 +177,68 @@ class ChunkRetrievalResponse(BaseModel):
     limit: int = Field(ge=1)
     offset: int = Field(ge=0)
     results: list[RetrievalHitResponse]
+
+
+class EvidenceSpanRequest(BaseModel):
+    """One exact page-text span whose PDF geometry is requested.
+
+    ``match_start``/``match_end`` are Python string offsets into the stored
+    page text, never PDFium character indices and never PDF coordinates. They
+    identify the occurrence; ``hit_text`` is echoed back and verified, it is
+    never used to search for the occurrence.
+    """
+
+    page_index: int = Field(ge=0)
+    match_start: int = Field(ge=0)
+    match_end: int = Field(ge=1)
+    hit_text: str = Field(min_length=1)
+    chunk_id: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def _span_must_be_consistent(self) -> EvidenceSpanRequest:
+        if self.match_end <= self.match_start:
+            raise ValueError("match_end must be greater than match_start")
+        if len(self.hit_text) != self.match_end - self.match_start:
+            raise ValueError("hit_text length must equal match_end - match_start")
+        return self
+
+
+class EvidenceLocateRequest(BaseModel):
+    """Batch of spans to locate in one stored document.
+
+    Items keep their order and are never deduplicated. The whole request
+    fails if any item is invalid.
+    """
+
+    items: list[EvidenceSpanRequest] = Field(min_length=1, max_length=20)
+
+
+class LocatedEvidenceResponse(BaseModel):
+    """One span located in the rendered PDF.
+
+    ``char_start``/``char_count`` are PDFium character indices.
+    ``rects``/``bbox`` are absolute PDF user space rectangles in points.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    page_index: int
+    page_number: int
+    match_start: int
+    match_end: int
+    hit_text: str
+    chunk_id: str | None
+    char_start: int
+    char_count: int
+    matched_text: str
+    rects: list[RectResponse]
+    bbox: RectResponse | None
+    page: PageResponse
+
+
+class EvidenceLocateResponse(BaseModel):
+    """All located spans for one request, in request order."""
+
+    document_id: UUID
+    total: int = Field(ge=0)
+    results: list[LocatedEvidenceResponse]

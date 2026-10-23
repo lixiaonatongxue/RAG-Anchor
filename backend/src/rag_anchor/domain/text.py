@@ -16,10 +16,13 @@ into the *stored* ``PageText.text`` string. They are:
 The traceability invariant is::
 
     page.text[chunk.start_offset:chunk.end_offset] == chunk.text
-
-A chunk is not a verified PDF anchor. Locating a chunk in the rendered PDF is a
-later step that must call :func:`rag_anchor.services.search_anchors` and only
-accept rectangles that were actually returned.
+A chunk is not a verified PDF anchor. Locating a chunk (or any page-text span)
+in the rendered PDF must go through
+:class:`rag_anchor.services.evidence_service.EvidenceLocationService`
+(the ``POST /api/v1/documents/{document_id}/evidence/locate`` endpoint) or the
+existing anchor search API, and only ever accept rectangles that were actually
+returned by PDFium. Python ``str`` offsets are never PDFium character indices:
+the evidence location service maps between the two spaces explicitly.
 """
 
 from __future__ import annotations

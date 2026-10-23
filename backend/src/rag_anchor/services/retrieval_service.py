@@ -10,9 +10,14 @@ The service is deliberately minimal:
 * no embeddings, vector store, LLM or extra dependency is involved.
 
 Offsets are Python ``str`` slice boundaries into the stored page text. They are
-**not** PDF user-space coordinates. This service never fabricates rectangles or
-page geometry; callers that need geometry must use the existing anchor search
-API.
+**not** PDF user-space coordinates and **not** PDFium character indices. This
+service never fabricates rectangles or page geometry. Callers that need geometry
+for an exact retrieved span must pass ``document_id`` + ``page_index`` +
+``match_start`` + ``match_end`` to
+:class:`rag_anchor.services.evidence_service.EvidenceLocationService`
+(``POST /api/v1/documents/{document_id}/evidence/locate``), or use the existing
+anchor search API. The evidence service maps Python offsets to PDFium character
+indices explicitly and only ever returns real PDFium rectangles.
 
 Candidate collection, de-duplication and overlap selection
 ----------------------------------------------------------

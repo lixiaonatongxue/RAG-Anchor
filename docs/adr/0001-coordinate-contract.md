@@ -118,22 +118,22 @@ y_norm = (y_abs - cropbox.bottom) / page_height_pt
 - `backend/tests/unit/test_search.py`
 - `backend/tests/unit/test_geometry.py`
 
-| 行为                 | 实测结果                                                                                                                 | 固化测试                                                               |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| 多页文档             | `len(PdfDocument)` 与页数一致；`document[0]` 为第 1 页                                                                   | `test_pages_are_addressed_by_zero_based_index`                         |
-| 文本提取             | `PdfTextPage.get_text_range()` 返回整页文本，行间为 `\r\n`                                                               | `test_character_count_matches_extracted_text`                          |
-| 文本搜索 API         | `PdfTextPage.search(...)` 返回 `PdfTextSearcher`；`get_next()` 返回 `(start_index, count)`，末尾返回 `None`              | `test_search_returns_character_index_and_count`                        |
-| 多命中               | 循环调用 `get_next()` 可取得全部命中，不合并、不去重                                                                     | `test_search_finds_all_occurrences_and_is_case_insensitive_by_default` |
-| 大小写               | `match_case=False` 为默认值，`quick` 命中 `QUICK`；`match_case=True` 仅命中大小写完全一致项                              | 同上                                                                   |
-| 零命中               | `get_next()` 返回 `None`；适配层应转换为 `[]`                                                                            | `test_search_returns_no_hits_for_absent_text`                          |
-| 跨行搜索             | `search("gamma second")` 命中跨 `\r\n` 的文本；`get_text_range(start, count)` 返回 `"gamma\r\nsecond"`                   | `test_search_matches_phrase_across_line_break`                         |
-| 字符坐标原点         | reportlab 基线 `(100, 200)`、12 pt 的 `T` 返回 `(100.168, 200.0, 107.164, 208.616)`，即左下原点、y 向上                  | `test_charbox_uses_pdf_user_space_with_lower_left_origin`              |
-| 字符矩形合并         | `The` 三个字符合并为 `(100.168, 199.832, 120.196, 208.616)`                                                              | `test_merging_character_boxes_yields_word_bounding_box`                |
-| CropBox 与尺寸       | CropBox `(50, 100, 400, 500)` 时 `get_size() == (350, 400)`                                                              | `test_cropbox_sets_page_size_but_charbox_stays_absolute`               |
+| 行为                 | 实测结果                                                                                                                                                                    | 固化测试                                                               |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 多页文档             | `len(PdfDocument)` 与页数一致；`document[0]` 为第 1 页                                                                                                                      | `test_pages_are_addressed_by_zero_based_index`                         |
+| 文本提取             | `PdfTextPage.get_text_range()` 返回整页文本，行间为 `\r\n`                                                                                                                  | `test_character_count_matches_extracted_text`                          |
+| 文本搜索 API         | `PdfTextPage.search(...)` 返回 `PdfTextSearcher`；`get_next()` 返回 `(start_index, count)`，末尾返回 `None`                                                                 | `test_search_returns_character_index_and_count`                        |
+| 多命中               | 循环调用 `get_next()` 可取得全部命中，不合并、不去重                                                                                                                        | `test_search_finds_all_occurrences_and_is_case_insensitive_by_default` |
+| 大小写               | `match_case=False` 为默认值，`quick` 命中 `QUICK`；`match_case=True` 仅命中大小写完全一致项                                                                                 | 同上                                                                   |
+| 零命中               | `get_next()` 返回 `None`；适配层应转换为 `[]`                                                                                                                               | `test_search_returns_no_hits_for_absent_text`                          |
+| 跨行搜索             | `search("gamma second")` 命中跨 `\r\n` 的文本；`get_text_range(start, count)` 返回 `"gamma\r\nsecond"`                                                                      | `test_search_matches_phrase_across_line_break`                         |
+| 字符坐标原点         | reportlab 基线 `(100, 200)`、12 pt 的 `T` 返回 `(100.168, 200.0, 107.164, 208.616)`，即左下原点、y 向上                                                                     | `test_charbox_uses_pdf_user_space_with_lower_left_origin`              |
+| 字符矩形合并         | `The` 三个字符合并为 `(100.168, 199.832, 120.196, 208.616)`                                                                                                                 | `test_merging_character_boxes_yields_word_bounding_box`                |
+| CropBox 与尺寸       | CropBox `(50, 100, 400, 500)` 时 `get_size() == (350, 400)`                                                                                                                 | `test_cropbox_sets_page_size_but_charbox_stays_absolute`               |
 | CropBox 与字符坐标   | `get_charbox()` 仍返回绝对 user space（`quick` 左边界约 `124.432`），不自动扣除 `(50, 100)`；显式扣除后左边界约 `74.432`（仅为 M0-02 引擎行为记录；生产适配器不执行该扣除） | 同上                                                                   |
-| `/Rotate 90/180/270` | `get_rotation()` 返回精确角度；`get_size()` 返回旋转后尺寸；`get_charbox()` 与未旋转页面完全一致                         | `test_rotation_is_reported_without_rotating_charboxes`                 |
-| Rotate + CropBox     | CropBox 350×400、`/Rotate 90` 时 `get_size() == (400, 350)`                                                              | `test_rotation_and_cropbox_combine_in_reported_page_size`              |
-| 字符计数             | 样例中 `count_chars() == len(get_text_range())`                                                                          | `test_character_count_matches_extracted_text`                          |
+| `/Rotate 90/180/270` | `get_rotation()` 返回精确角度；`get_size()` 返回旋转后尺寸；`get_charbox()` 与未旋转页面完全一致                                                                            | `test_rotation_is_reported_without_rotating_charboxes`                 |
+| Rotate + CropBox     | CropBox 350×400、`/Rotate 90` 时 `get_size() == (400, 350)`                                                                                                                 | `test_rotation_and_cropbox_combine_in_reported_page_size`              |
+| 字符计数             | 样例中 `count_chars() == len(get_text_range())`                                                                                                                             | `test_character_count_matches_extracted_text`                          |
 
 这些测试只固化 M0-02 观察到的事实。生产 `search_anchors()` 已在 M0-03 基于这些事实实现，M0-03.1 将其坐标输出统一为绝对 user space。
 
@@ -199,6 +199,17 @@ y_norm = (y_abs - cropbox.bottom) / page_height_pt
   ]
 }
 ```
+
+## M1-03B 复用说明（evidence/locate）
+
+M1-03B 的精确证据定位（`POST /api/v1/documents/{document_id}/evidence/locate`）**完全复用**本契约，不引入任何新的坐标语义：
+
+- `EvidenceLocationService` 复用 `anchor_service` 的 `match_rects()` 与 `build_page_descriptor()`（仅由内部私有名提升为公开名，行为逐字不变）。`rects` / `bbox` / `page` 的语义与 `search_anchors` 完全一致：绝对 user space、单位 points、不减 CropBox 原点、不烘焙 `/Rotate`、跨行每行一个矩形、`bbox` 由真实 `rects` 派生。
+- 新增的映射只发生在**文本索引空间**，不触碰几何语义：Python `str` 偏移（存储页面文本，即 `get_text_range()` 返回值）→ PDFium 字符索引 → `get_charbox()` 几何。该映射显式且双向校验；边界无法精确表达时明确失败（HTTP 409），绝不返回近似矩形。
+- 若命中区间**内部**包含 PDFium 无法表达为空段的字符，同样返回 409。实测这类字符的 `get_charbox()` 仍返回有效矩形（非 BMP 探针：`(107.94, 697.89, 113.94, 708.46)`），若包含在区间内会产生调用方未请求的高亮；命中之前或之后的空段由严格边界选择排除，仍可正常定位。
+- 映射完成后额外校验 `get_text_range(char_start, char_count)` 与逐字符拼接结果一致；不一致说明 PDFium 在整段提取时重写或丢弃了字符，此时返回 409。
+- `hit_text` 仅用于校验，不用于搜索；occurrence 由 `page_index + match_start + match_end` 唯一确定，不从重复文本推测。
+- 本复用不改变本 ADR 的任何既有决策；`search_anchors` 的行为与错误语义保持不变。
 
 ## 后果
 
