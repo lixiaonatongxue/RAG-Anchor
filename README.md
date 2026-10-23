@@ -28,7 +28,7 @@ search_anchors(pdf_path: str | Path, query: str, *, match_case: bool = True) -> 
 
 ## 当前阶段
 
-**M0-05B + M0-05C：可交互 PDF 证据定位前端（命中自动居中）**。
+**M1：可追溯检索、精确证据定位与证据展示问答（无 LLM）**。
 
 已实现：
 
@@ -40,9 +40,13 @@ search_anchors(pdf_path: str | Path, query: str, *, match_case: bool = True) -> 
 - PDF.js 单页阅读器：翻页、页码跳转、放大、缩小、适合宽度
 - 证据搜索、命中列表、上一命中/下一命中、高亮定位
 - 点击任意命中后自动定位并居中；同页与跨页均支持，缩放后高亮位置按当前 viewport 重新计算
-- Vitest 单元测试：API client、高亮坐标转换与命中居中滚动
+- Chunk 索引、字面 Chunk 检索、Python 字符串偏移与来源一致性校验
+- `evidence/locate`：把检索 span 映射为真实 PDFium 字符区间与逐行几何矩形
+- 证据展示问答：单文档字面检索 → 可验证引用列表 → 点击引用复用 `evidence/locate` 与 PDF.js 高亮
+- 无相关证据时明确拒答；不调用语言模型，不生成无引用的事实
+- Vitest 单元测试：API client、高亮坐标转换、命中居中滚动、检索引用与问答交互
 
-本地开发 MVP：**无认证、无速率限制、无 OCR、无 LLM/向量数据库**。
+本地开发 MVP：**无认证、无速率限制、无 OCR、无 LLM/向量数据库**。问答为**证据展示模式**，不是生成式 RAG。
 
 ## 技术栈
 
@@ -144,7 +148,10 @@ VITE_API_PROXY_TARGET=http://127.0.0.1:9000
 6. 点击任意命中项，阅读器跳到对应页并高亮该命中，同时将命中位置滚动到阅读器视口中央（同页与跨页均支持）；其他命中使用另一种颜色。
 7. 使用「上一命中 / 下一命中」在所有命中之间循环切换。
 8. 使用翻页、页码输入、放大、缩小、适合宽度查看细节；缩放后命中高亮会按当前 viewport 重新计算位置。
-9. 悬停文档卡片右上角可删除文档（会二次确认）。
+9. 在「证据问答」中输入问题；由于当前是字面检索，可另填文档中出现的检索关键词（留空则使用问题原文）。
+10. 点击「提问」后，系统只返回匹配的原文证据和引用列表，并明确标注“证据展示模式，未接入语言模型”；没有证据时会明确拒答。
+11. 点击任意引用（如 `E1`），前端使用 `evidence/locate` 验证 span 并跳转、高亮原始 PDF；定位失败时不会搜索文字或绘制近似高亮。
+12. 悬停文档卡片右上角可删除文档（会二次确认）。
 
 ## API 概览
 
@@ -159,6 +166,8 @@ VITE_API_PROXY_TARGET=http://127.0.0.1:9000
 | `POST`   | `/api/v1/documents/{document_id}/anchors/search` | 精确检索证据文字                    |
 | `POST`   | `/api/v1/documents/{document_id}/index`          | 建立或重建 Chunk 索引               |
 | `POST`   | `/api/v1/retrieval/search`                       | 在已索引 Chunk 中检索并返回来源偏移 |
+| `POST`   | `/api/v1/documents/{document_id}/evidence/locate` | 将检索 span 定位为真实 PDF 几何     |
+| `POST`   | `/api/v1/documents/{document_id}/qa`              | 证据展示问答，返回可验证引用（无 LLM） |
 
 最小后端链路：
 

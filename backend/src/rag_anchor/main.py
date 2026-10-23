@@ -11,11 +11,13 @@ from pydantic import BaseModel
 from rag_anchor import __version__
 from rag_anchor.api.documents import router as documents_router
 from rag_anchor.api.evidence import router as evidence_router
+from rag_anchor.api.qa import router as qa_router
 from rag_anchor.api.retrieval import router as retrieval_router
 from rag_anchor.config import Settings
 from rag_anchor.services.document_service import DocumentService
 from rag_anchor.services.evidence_service import EvidenceLocationService
 from rag_anchor.services.index_service import DocumentIndexService
+from rag_anchor.services.qa_service import QuestionAnswerService
 from rag_anchor.services.retrieval_service import ChunkRetrievalService
 
 API_PREFIX = "/api/v1"
@@ -39,6 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     index_service = DocumentIndexService(document_service)
     retrieval_service = ChunkRetrievalService(document_service)
     evidence_service = EvidenceLocationService(document_service)
+    question_service = QuestionAnswerService(document_service, retrieval_service)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -55,9 +58,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.index_service = index_service
     app.state.retrieval_service = retrieval_service
     app.state.evidence_service = evidence_service
+    app.state.question_service = question_service
     app.include_router(documents_router, prefix=API_PREFIX)
     app.include_router(retrieval_router, prefix=API_PREFIX)
     app.include_router(evidence_router, prefix=API_PREFIX)
+    app.include_router(qa_router, prefix=API_PREFIX)
 
     @app.get(f"{API_PREFIX}/health", response_model=HealthResponse, tags=["system"])
     def health() -> HealthResponse:

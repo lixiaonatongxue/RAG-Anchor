@@ -30,9 +30,9 @@ PDF + query
 
 | 层          | 职责                                                                                      | 当前状态                                                                                                                                                                                                                            |
 | ----------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api/`      | HTTP 路由、请求/响应模型                                                                  | health、文档管理（M0-04A）、证据搜索（M0-04B）、文件读取（M0-05A）、索引入口（M1-03A）、Chunk 检索（M1-02）、精确证据定位（M1-03B）                                                                                                 |
+| `api/`      | HTTP 路由、请求/响应模型                                                                  | health、文档管理（M0-04A）、证据搜索（M0-04B）、文件读取（M0-05A）、索引入口（M1-03A）、Chunk 检索（M1-02）、精确证据定位（M1-03B）、证据展示问答（无 LLM）                                                                         |
 | `domain/`   | 与框架无关的领域模型（`AnchorHit`、`PdfRect`、`PageDescriptor`、`PageText`、`TextChunk`） | M0-03 已实现 `PdfRect` / `AnchorHit` / `PageDescriptor`；M1-01 已实现 `PageText` / `TextChunk`                                                                                                                                      |
-| `services/` | PDF 解析、文本抽取与切分、索引、检索、证据定位、文档管理                                  | M0-03 `search_anchors`；M0-04A `DocumentService`；M1-01 文本抽取与 Chunk 切分；M1-02 `ChunkRetrievalService`；M1-03A `DocumentIndexService`；M1-03B `EvidenceLocationService`（并公开复用 `match_rects` / `build_page_descriptor`） |
+| `services/` | PDF 解析、文本抽取与切分、索引、检索、证据定位、问答、文档管理                            | M0-03 `search_anchors`；M0-04A `DocumentService`；M1-01 文本抽取与 Chunk 切分；M1-02 `ChunkRetrievalService`；M1-03A `DocumentIndexService`；M1-03B `EvidenceLocationService`；`QuestionAnswerService`（仅证据展示，无 LLM）        |
 | `infra/`    | 本地文件存储、SQLite 元数据仓储                                                           | M0-04A `DocumentRepository`；M1-01 新增页面文本、Chunk 与索引元数据表                                                                                                                                                               |
 
 运行时配置位于 `rag_anchor/config.py`（读取 `RAG_ANCHOR_DATA_DIR` 与 `RAG_ANCHOR_MAX_UPLOAD_BYTES`）。
@@ -72,6 +72,7 @@ def search_anchors(
 | POST   | `/api/v1/documents/{document_id}/index`           | 建立或重建页面文本与 Chunk 索引（M1-03A）     |
 | POST   | `/api/v1/retrieval/search`                        | 在已索引 Chunk 中检索并返回来源偏移（M1-02）  |
 | POST   | `/api/v1/documents/{document_id}/evidence/locate` | 将页面文本 span 定位为真实 PDF 几何（M1-03B） |
+| POST   | `/api/v1/documents/{document_id}/qa`              | 单文档证据展示问答，返回可验证引用（无 LLM）  |
 | GET    | `/api/v1/documents/{document_id}/file`            | 读取已上传 PDF 原始字节（内联展示）           |
 
 索引入口 `POST /documents/{document_id}/index` 只调用 `DocumentIndexService.index_document()`：PDF 哈希、文本抽取、Chunk 切分、来源校验与单事务原子替换旧索引均不在路由层重写。重复调用会重建索引，相同 PDF 与配置下最终 Chunk 集合一致，不是缓存命中；重建失败时保留原索引。
@@ -249,7 +250,32 @@ page_index / page_number / char_start / char_count / rects / bbox / page
 - 校验只读：不重新索引、不写数据库、不刷新 fingerprint。
 - 错误语义：404 文档不存在；422 请求项与存储文本/Chunk 不一致；409 未索引、索引与当前 PDF 不一致、span 无法精确映射或无真实几何；500 PDF 缺失或不可读。
 
-### 2.6 前端（后续阶段）
+### 2.6 证据展示问答（无 LLM）
+
+```http
+POST /api/v1/documents/{document_id}/qa
+```
+
+请求体：
+
+```json
+{
+  "question": "论文提出的方法有哪些特点？",
+  "retrieval_query": "proposed method",
+  "match_case": false,
+  "max_citations": 5
+}
+```
+
+- 当前**没有**语言模型、embedding、向量检索或 rerank。问答直接复用 M1-02 的字面 Chunk 检索，`retrieval_query` 是可选的检索原文；省略时使用 `question` 原文进行字面匹配。自然语言问题不会被语义理解。
+- 检索严格限定 `document_id`；引用只能来自该文档已持久化的 Chunk。
+- `answer_mode` 固定为 `evidence_only`。`answer` 是固定的、明确标注“未接入语言模型”的服务端说明，不是模型生成的结论。
+- 每条引用包含 `citation_id`、`document_id`、`chunk_id`、`page_index`、`page_number`、`match_start`、`match_end`、`hit_text`、`chunk_text`、`extraction_version`。偏移是 Python `str` 偏移，不包含 PDF 几何。
+- 点击引用时前端调用 M1-03B `POST /evidence/locate`，使用 `page_index + match_start + match_end + hit_text + chunk_id` 精确定位，并复用现有 PDF.js 高亮。
+- 没有命中时返回 HTTP 200，`status = "insufficient_evidence"`、`citations = []`，并明确说明无法依据文档回答。
+- 错误语义：404 文档不存在；409 文档尚未索引或索引版本不可用；422 请求非法。问答不写入数据库，也不修改索引。
+
+### 2.7 前端（后续阶段）
 
 - React + TypeScript + Vite + PDF.js。
 - PDF.js 负责 PDF 用户空间 → 画布像素的变换。
@@ -280,7 +306,7 @@ backend/.data/                 # 可由 RAG_ANCHOR_DATA_DIR 覆盖
 
 ## 5. 非目标（第一版）
 
-- LLM 问答、自动生成锚点
+- LLM 问答、自动生成锚点（现有证据展示问答不调用任何生成式模型）
 - embedding / 向量检索 / rerank
 - OCR、扫描件
 - GPU / PyTorch

@@ -186,6 +186,51 @@
             <div class="results-list chunk-results" id="chunk-results"></div>
           </section>
 
+          <section class="panel qa-panel" aria-label="证据问答">
+            <div class="panel-heading">
+              <h2>证据问答</h2>
+              <span class="panel-hint">证据展示 · 无 LLM</span>
+            </div>
+            <form class="search-form" id="qa-form">
+              <label class="field-label" for="qa-question">问题</label>
+              <textarea
+                id="qa-question"
+                rows="2"
+                placeholder="例如：论文提出的方法有哪些特点？"
+                spellcheck="false"
+              ></textarea>
+              <label class="field-label" for="qa-query"
+                >检索关键词（可选，字面匹配）</label
+              >
+              <input
+                class="qa-query"
+                id="qa-query"
+                type="text"
+                placeholder="留空则使用问题原文；建议填写文档原文词句"
+                spellcheck="false"
+              />
+              <div class="qa-controls">
+                <span class="panel-hint">不调用语言模型，仅返回原文证据</span>
+                <button
+                  class="primary-button"
+                  id="qa-submit"
+                  type="submit"
+                  disabled
+                >
+                  提问
+                </button>
+              </div>
+            </form>
+            <p class="search-hint" id="qa-hint">
+              请先选择一个文档并建立索引。
+            </p>
+            <div class="qa-answer" id="qa-answer" hidden aria-live="polite">
+              <p class="qa-answer-mode">证据展示模式 · 未接入语言模型</p>
+              <p class="qa-answer-text" id="qa-answer-text"></p>
+            </div>
+            <div class="qa-citations" id="qa-citations"></div>
+          </section>
+
           <section class="panel search-panel">
             <div class="panel-heading">
               <h2>证据搜索</h2>

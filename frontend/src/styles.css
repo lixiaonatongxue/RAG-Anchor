@@ -487,11 +487,107 @@ button:disabled {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
-.search-controls {
+.search-controls,
+.qa-controls {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.qa-controls .panel-hint {
+  line-height: 1.45;
+}
+
+.qa-query {
+  width: 100%;
+  padding: 8px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: var(--surface);
+  font-size: 12.5px;
+  line-height: 1.5;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.qa-query::placeholder {
+  color: var(--text-muted);
+}
+
+.qa-query:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.qa-answer {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+}
+
+.qa-answer-mode {
+  margin: 0 0 5px;
+  color: var(--accent-strong);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+}
+
+.qa-answer-text {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.qa-citations {
+  display: flex;
+  max-height: 250px;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  margin-top: 8px;
+  padding-right: 2px;
+}
+
+.qa-citations:empty {
+  display: none;
+}
+
+.citation-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: var(--surface-sunken);
+  font-size: 10.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.result-item.is-active .citation-pill {
+  color: #fff;
+  background: var(--accent);
+}
+
+.qa-citation-context {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-word;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .checkbox {
@@ -1071,6 +1167,7 @@ button:disabled {
 .sidebar,
 .document-list,
 .results-list,
+.qa-citations,
 .viewer-stage {
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
@@ -1079,6 +1176,7 @@ button:disabled {
 .sidebar::-webkit-scrollbar,
 .document-list::-webkit-scrollbar,
 .results-list::-webkit-scrollbar,
+.qa-citations::-webkit-scrollbar,
 .viewer-stage::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -1087,6 +1185,7 @@ button:disabled {
 .sidebar::-webkit-scrollbar-thumb,
 .document-list::-webkit-scrollbar-thumb,
 .results-list::-webkit-scrollbar-thumb,
+.qa-citations::-webkit-scrollbar-thumb,
 .viewer-stage::-webkit-scrollbar-thumb {
   border-radius: 99px;
   background: #cbd5e1;
@@ -1095,6 +1194,7 @@ button:disabled {
 .sidebar::-webkit-scrollbar-track,
 .document-list::-webkit-scrollbar-track,
 .results-list::-webkit-scrollbar-track,
+.qa-citations::-webkit-scrollbar-track,
 .viewer-stage::-webkit-scrollbar-track {
   background: transparent;
 }

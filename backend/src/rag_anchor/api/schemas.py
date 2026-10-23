@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from rag_anchor.services.qa_service import (
+    DEFAULT_MAX_CITATIONS,
+    MAX_CITATIONS,
+    MAX_QUESTION_LENGTH,
+)
 from rag_anchor.services.retrieval_service import (
     DEFAULT_RETRIEVAL_LIMIT,
     MAX_QUERY_LENGTH,
@@ -242,3 +248,73 @@ class EvidenceLocateResponse(BaseModel):
     document_id: UUID
     total: int = Field(ge=0)
     results: list[LocatedEvidenceResponse]
+
+
+class QuestionRequest(BaseModel):
+    """One question scoped to an indexed document.
+
+    There is no semantic retrieval or language model in this MVP. ``question``
+    is echoed back and displayed; retrieval is literal. ``retrieval_query``
+    optionally supplies the literal text to search and defaults to the
+    question itself when omitted.
+    """
+
+    question: str = Field(min_length=1, max_length=MAX_QUESTION_LENGTH)
+    retrieval_query: str | None = Field(default=None, max_length=MAX_QUERY_LENGTH)
+    match_case: bool = False
+    max_citations: int = Field(default=DEFAULT_MAX_CITATIONS, ge=1, le=MAX_CITATIONS)
+
+    @field_validator("question")
+    @classmethod
+    def _question_must_contain_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("question must be a non-empty, non-whitespace string")
+        return value
+
+    @field_validator("retrieval_query")
+    @classmethod
+    def _retrieval_query_must_contain_text(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("retrieval_query must be a non-empty, non-whitespace string")
+        return value
+
+
+class EvidenceCitationResponse(BaseModel):
+    """One retrieved page-text span, ready for the evidence locate endpoint.
+
+    ``match_start``/``match_end`` are Python string offsets into the stored
+    page text, exactly as returned by chunk retrieval. No PDF coordinates are
+    produced by question answering.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    citation_id: str
+    document_id: UUID
+    chunk_id: str
+    page_index: int = Field(ge=0)
+    page_number: int = Field(ge=1)
+    chunk_index: int = Field(ge=0)
+    match_start: int = Field(ge=0)
+    match_end: int = Field(ge=1)
+    hit_text: str
+    chunk_text: str
+    extraction_version: str
+
+
+class QuestionResponse(BaseModel):
+    """Evidence-only answer plus its independently verifiable citations.
+
+    ``answer`` is a fixed, explicitly labelled notice, never model output.
+    Every citation comes from the persisted chunk index of ``document_id``.
+    """
+
+    document_id: UUID
+    question: str
+    retrieval_query: str
+    match_case: bool
+    answer_mode: Literal["evidence_only"]
+    status: Literal["evidence_found", "insufficient_evidence"]
+    answer: str
+    total_matches: int = Field(ge=0)
+    citations: list[EvidenceCitationResponse]

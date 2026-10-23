@@ -3,6 +3,7 @@ import type {
   AnchorHit,
   DocumentIndexResponse,
   DocumentSummary,
+  EvidenceCitation,
   RetrievalHit,
 } from "./api/types";
 import { paintHighlights } from "./highlight/renderer";
@@ -15,6 +16,11 @@ import {
 import type { HighlightSelection } from "./highlight/selection";
 import { PdfViewer } from "./pdf/viewer";
 import type { ViewerState } from "./pdf/viewer";
+import {
+  citationBelongsToDocument,
+  citationLabel,
+  toCitationEvidenceSpan,
+} from "./qa/citation";
 import {
   CHUNK_PAGE_SIZE,
   chunkEmptyMessage,
@@ -64,6 +70,15 @@ const chunkPosition = byId<HTMLSpanElement>("chunk-position");
 const chunkPrev = byId<HTMLButtonElement>("chunk-prev");
 const chunkNext = byId<HTMLButtonElement>("chunk-next");
 const chunkResults = byId<HTMLDivElement>("chunk-results");
+
+const qaForm = byId<HTMLFormElement>("qa-form");
+const qaQuestion = byId<HTMLTextAreaElement>("qa-question");
+const qaQuery = byId<HTMLInputElement>("qa-query");
+const qaSubmit = byId<HTMLButtonElement>("qa-submit");
+const qaHint = byId<HTMLParagraphElement>("qa-hint");
+const qaAnswer = byId<HTMLDivElement>("qa-answer");
+const qaAnswerText = byId<HTMLParagraphElement>("qa-answer-text");
+const qaCitations = byId<HTMLDivElement>("qa-citations");
 
 const searchForm = byId<HTMLFormElement>("search-form");
 const searchInput = byId<HTMLTextAreaElement>("search-input");
@@ -147,6 +162,13 @@ let chunkSearching = false;
 let chunkSearchInFlight = false;
 const chunkGate = createRequestGate();
 const locateGate = createRequestGate();
+
+/* ---------- Evidence-only question answering state ---------- */
+
+let qaCitationItems: EvidenceCitation[] = [];
+let qaActiveIndex = -1;
+let qaInFlight = false;
+const qaGate = createRequestGate();
 
 const viewer = new PdfViewer(
   {
@@ -404,6 +426,7 @@ async function selectDocument(documentId: string): Promise<void> {
   resetSearchResults();
   resetChunkState();
   resetIndexState();
+  resetQaState();
   updateSearchAvailability();
 
   viewerTitle.textContent = document.filename;
@@ -458,6 +481,7 @@ async function clearSelection(): Promise<void> {
   resetSearchResults();
   resetChunkState();
   resetIndexState();
+  resetQaState();
   updateSearchAvailability();
   renderDocuments();
 
@@ -589,6 +613,7 @@ function updateSearchAvailability(): void {
   updateSearchButton();
   updateIndexAvailability();
   updateChunkAvailability();
+  updateQaAvailability();
 }
 
 function resetSearchResults(): void {
@@ -635,6 +660,36 @@ function resetChunkState(): void {
   renderChunkResults();
 }
 
+function resetQaState(): void {
+  qaGate.begin();
+  locateGate.begin();
+  qaCitationItems = [];
+  qaActiveIndex = -1;
+  qaInFlight = false;
+  qaAnswer.hidden = true;
+  qaAnswerText.textContent = "";
+  qaCitations.replaceChildren();
+  qaHint.className = "search-hint";
+  if (!selectedId) {
+    qaHint.textContent = "请先选择一个文档。";
+  } else if (indexedDocumentId !== selectedId) {
+    qaHint.textContent = "请先建立索引后再提问。";
+  } else {
+    qaHint.textContent = "已建立索引，可以提问。仅展示原文证据，不生成结论。";
+  }
+  updateQaAvailability();
+}
+
+function updateQaAvailability(): void {
+  const indexed = Boolean(selectedId) && indexedDocumentId === selectedId;
+  qaSubmit.disabled =
+    !indexed ||
+    indexInFlight ||
+    qaInFlight ||
+    qaQuestion.value.trim().length === 0;
+  qaSubmit.textContent = qaInFlight ? "检索中…" : "提问";
+}
+
 function updateIndexAvailability(): void {
   const document = documents.find((item) => item.document_id === selectedId);
   if (!document) {
@@ -676,6 +731,9 @@ async function performIndex(): Promise<void> {
   indexInFlight = true;
   indexStatus.textContent = "索引中";
   updateIndexAvailability();
+  // Re-indexing can replace chunk identifiers, so old answers and any
+  // in-flight question must not survive into the new index.
+  resetQaState();
 
   try {
     const stats = await api.indexDocument(documentId);
@@ -685,6 +743,9 @@ async function performIndex(): Promise<void> {
     indexedDocumentId = documentId;
     indexStats = stats;
     indexStatus.textContent = "已索引";
+    qaHint.className = "search-hint";
+    qaHint.textContent =
+      "索引已就绪，可以提问。仅展示原文证据，不生成结论。";
     showToast(
       `已建立索引：${stats.page_count} 页 · ${stats.chunk_count} 个 Chunk。`,
       "success"
@@ -700,6 +761,7 @@ async function performIndex(): Promise<void> {
       indexInFlight = false;
       updateIndexAvailability();
       updateChunkAvailability();
+      updateQaAvailability();
     }
   }
 }
@@ -880,6 +942,209 @@ function performChunkSearch(event: SubmitEvent): void {
 
 function goChunkPage(offset: number): void {
   void runChunkSearch(offset);
+}
+
+function renderQaCitations(): void {
+  qaCitations.replaceChildren();
+
+  qaCitationItems.forEach((citation, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `result-item qa-citation${
+      index === qaActiveIndex ? " is-active" : ""
+    }`;
+    button.setAttribute(
+      "aria-current",
+      index === qaActiveIndex ? "true" : "false"
+    );
+    button.setAttribute(
+      "aria-label",
+      `${citationLabel(citation)}：${snippet(citation.hit_text, 80)}`
+    );
+
+    const topLine = document.createElement("span");
+    topLine.className = "result-topline";
+
+    const citationPill = document.createElement("span");
+    citationPill.className = "citation-pill";
+    citationPill.textContent = citation.citation_id;
+
+    const pagePill = document.createElement("span");
+    pagePill.className = "page-pill";
+    pagePill.textContent = `第 ${citation.page_number} 页`;
+
+    const charRange = document.createElement("span");
+    charRange.className = "result-char";
+    charRange.textContent = `字符 ${citation.match_start}–${citation.match_end}`;
+
+    topLine.append(citationPill, pagePill, charRange);
+
+    const text = document.createElement("p");
+    text.className = "result-text";
+    text.textContent = snippet(citation.hit_text, 180);
+
+    const context = document.createElement("p");
+    context.className = "qa-citation-context";
+    context.textContent = snippet(citation.chunk_text, 220);
+
+    button.append(topLine, text, context);
+    button.addEventListener("click", () => {
+      void locateQaCitation(index);
+    });
+    qaCitations.append(button);
+  });
+}
+
+async function performQuestion(event: SubmitEvent): Promise<void> {
+  event.preventDefault();
+
+  const documentId = selectedId;
+  if (!documentId || qaInFlight) {
+    return;
+  }
+  if (indexedDocumentId !== documentId) {
+    qaHint.className = "search-hint is-error";
+    qaHint.textContent = "请先建立索引后再提问。";
+    return;
+  }
+
+  const question = qaQuestion.value.trim();
+  if (!question) {
+    qaHint.className = "search-hint is-error";
+    qaHint.textContent = "请输入问题。";
+    qaQuestion.focus();
+    return;
+  }
+
+  const retrievalQuery = qaQuery.value.trim();
+  const token = qaGate.begin();
+  locateGate.begin();
+  qaInFlight = true;
+  qaCitationItems = [];
+  qaActiveIndex = -1;
+  qaAnswer.hidden = true;
+  qaAnswerText.textContent = "";
+  qaCitations.replaceChildren();
+  qaHint.className = "search-hint is-info";
+  qaHint.textContent = "正在检索原文证据…";
+  updateQaAvailability();
+
+  try {
+    const response = await api.askQuestion(documentId, {
+      question,
+      retrievalQuery: retrievalQuery || undefined,
+    });
+    if (!qaGate.isCurrent(token) || selectedId !== documentId) {
+      return;
+    }
+    if (response.answer_mode !== "evidence_only") {
+      throw new Error("后端返回了不支持的问答模式。");
+    }
+
+    qaInFlight = false;
+    qaCitationItems = response.citations;
+    qaActiveIndex = -1;
+    qaAnswerText.textContent = response.answer;
+    qaAnswer.hidden = false;
+    renderQaCitations();
+
+    if (response.status === "insufficient_evidence") {
+      qaHint.className = "search-hint";
+      qaHint.textContent = "没有找到可支持回答的原文证据，已明确拒答。";
+    } else {
+      qaHint.className = "search-hint is-info";
+      qaHint.textContent = `按字面「${response.retrieval_query}」找到 ${
+        response.total_matches
+      } 条证据，返回 ${response.citations.length} 条引用。`;
+    }
+  } catch (error) {
+    if (!qaGate.isCurrent(token) || selectedId !== documentId) {
+      return;
+    }
+    qaInFlight = false;
+    qaCitationItems = [];
+    qaActiveIndex = -1;
+    qaAnswer.hidden = true;
+    qaAnswerText.textContent = "";
+    renderQaCitations();
+    qaHint.className = "search-hint is-error";
+    qaHint.textContent = friendlyError(error);
+    showToast(friendlyError(error), "error");
+  } finally {
+    if (qaGate.isCurrent(token) && selectedId === documentId) {
+      qaInFlight = false;
+      updateQaAvailability();
+    }
+  }
+}
+
+async function locateQaCitation(index: number): Promise<void> {
+  const citation = qaCitationItems[index];
+  const documentId = selectedId;
+  if (!citation || !documentId) {
+    return;
+  }
+  if (!citationBelongsToDocument(citation, documentId)) {
+    qaHint.className = "search-hint is-error";
+    qaHint.textContent = "引用不属于当前文档，已拒绝定位。";
+    return;
+  }
+
+  qaActiveIndex = index;
+  renderQaCitations();
+
+  const requestToken = locateGate.begin();
+  try {
+    const response = await api.locateEvidence(documentId, [
+      toCitationEvidenceSpan(citation),
+    ]);
+    if (!locateGate.isCurrent(requestToken) || selectedId !== documentId) {
+      return;
+    }
+    const located = response.results[0];
+    if (!located) {
+      highlightSelection = emptySelection();
+      highlightLayer.replaceChildren();
+      qaActiveIndex = -1;
+      renderQaCitations();
+      qaHint.className = "search-hint is-error";
+      qaHint.textContent = "服务端没有返回定位结果。";
+      return;
+    }
+
+    highlightSelection = evidenceSelection(located);
+    await viewer.setPage(located.page_number);
+
+    const scrollToken = scrollGate.begin();
+    await centerActiveHighlight(scrollToken);
+    if (!locateGate.isCurrent(requestToken) || selectedId !== documentId) {
+      return;
+    }
+
+    qaHint.className = "search-hint is-info";
+    qaHint.textContent = `已定位 ${citation.citation_id}：第 ${located.page_number} 页。`;
+    const activeItem = qaCitations.querySelector<HTMLElement>(
+      ".qa-citation.is-active"
+    );
+    if (activeItem) {
+      revealWithin(qaCitations, activeItem);
+    }
+  } catch (error) {
+    if (!locateGate.isCurrent(requestToken) || selectedId !== documentId) {
+      return;
+    }
+    // A failed location must not leave an unrelated highlight that could be
+    // mistaken for this citation. No fallback text search is attempted.
+    qaActiveIndex = -1;
+    renderQaCitations();
+    highlightSelection = emptySelection();
+    highlightLayer.replaceChildren();
+    const status = error instanceof ApiError ? error.status : 0;
+    const message = evidenceErrorMessage(status, friendlyError(error));
+    qaHint.className = "search-hint is-error";
+    qaHint.textContent = message;
+    showToast(message, "error");
+  }
 }
 
 function renderResults(): void {
@@ -1169,6 +1434,16 @@ chunkNext.addEventListener("click", () => {
 
 chunkInput.addEventListener("input", () => {
   updateChunkAvailability();
+});
+
+/* ---------- Question answering events ---------- */
+
+qaForm.addEventListener("submit", (event) => {
+  void performQuestion(event);
+});
+
+qaQuestion.addEventListener("input", () => {
+  updateQaAvailability();
 });
 
 /* ---------- Bootstrap ---------- */

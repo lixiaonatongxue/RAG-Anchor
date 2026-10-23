@@ -10,6 +10,7 @@ import type {
   EvidenceLocateResponse,
   EvidenceSpanRequest,
   LocatedEvidence,
+  QuestionAnswerResponse,
   RetrievalHit,
 } from "../src/api/types";
 
@@ -430,5 +431,91 @@ describe("RagAnchorApi.locateEvidence", () => {
     );
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body))).toEqual({ items });
+  });
+});
+
+const questionAnswer: QuestionAnswerResponse = {
+  document_id: documentSummary.document_id,
+  question: "What does the document say?",
+  retrieval_query: "quick",
+  match_case: false,
+  answer_mode: "evidence_only",
+  status: "evidence_found",
+  answer: "证据展示模式(未接入语言模型)。",
+  total_matches: 1,
+  citations: [
+    {
+      citation_id: "E1",
+      document_id: documentSummary.document_id,
+      chunk_id: "chunk-0001",
+      page_index: 0,
+      page_number: 1,
+      chunk_index: 0,
+      match_start: 12,
+      match_end: 17,
+      hit_text: "quick",
+      chunk_text: "The quick brown fox jumps over the lazy dog.",
+      extraction_version: "v1",
+    },
+  ],
+};
+
+describe("RagAnchorApi.askQuestion", () => {
+  it("posts the question and optional literal query to the qa endpoint", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(questionAnswer));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.askQuestion(documentSummary.document_id, {
+      question: "What does the document say?",
+      retrievalQuery: "quick",
+    });
+
+    expect(result).toEqual(questionAnswer);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`/api/v1/documents/${documentSummary.document_id}/qa`);
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      question: "What does the document say?",
+      match_case: false,
+      max_citations: 5,
+      retrieval_query: "quick",
+    });
+  });
+
+  it("omits retrieval_query when no literal query is supplied", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(questionAnswer));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.askQuestion(documentSummary.document_id, {
+      question: "What does the document say?",
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(init?.body))).toEqual({
+      question: "What does the document say?",
+      match_case: false,
+      max_citations: 5,
+    });
+  });
+
+  it("surfaces a 409 when the document has no index", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        jsonResponse({ detail: "Document has not been indexed" }, 409)
+      )
+    );
+
+    await expect(
+      api.askQuestion(documentSummary.document_id, { question: "quick" })
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      status: 409,
+      message: "Document has not been indexed",
+    });
   });
 });

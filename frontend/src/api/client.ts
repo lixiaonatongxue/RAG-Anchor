@@ -6,6 +6,7 @@ import type {
   DocumentSummary,
   EvidenceLocateResponse,
   EvidenceSpanRequest,
+  QuestionAnswerResponse,
 } from "./types";
 
 const API_BASE = "/api/v1";
@@ -169,6 +170,33 @@ export class RagAnchorApi {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items }),
+      }
+    );
+  }
+
+  askQuestion(
+    documentId: string,
+    options: {
+      question: string;
+      retrievalQuery?: string;
+      matchCase?: boolean;
+      maxCitations?: number;
+    }
+  ): Promise<QuestionAnswerResponse> {
+    const body: Record<string, unknown> = {
+      question: options.question,
+      match_case: options.matchCase ?? false,
+      max_citations: options.maxCitations ?? 5,
+    };
+    if (options.retrievalQuery) {
+      body.retrieval_query = options.retrievalQuery;
+    }
+    return request<QuestionAnswerResponse>(
+      `${API_BASE}/documents/${encodeURIComponent(documentId)}/qa`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       }
     );
   }

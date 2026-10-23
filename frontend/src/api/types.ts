@@ -127,3 +127,42 @@ export interface EvidenceLocateResponse {
   total: number;
   results: LocatedEvidence[];
 }
+
+/**
+ * One retrieved page-text span offered as a question citation.
+ *
+ * These are Python string offsets into the stored page text, never PDF
+ * coordinates. A citation is only displayable after evidence/locate maps it
+ * to real PDFium geometry.
+ */
+export interface EvidenceCitation {
+  citation_id: string;
+  document_id: string;
+  chunk_id: string;
+  page_index: number;
+  page_number: number;
+  chunk_index: number;
+  match_start: number;
+  match_end: number;
+  hit_text: string;
+  chunk_text: string;
+  extraction_version: string;
+}
+
+/**
+ * Evidence-only question answer.
+ *
+ * `answer` is a fixed server notice, not model output. `citations` contains
+ * only spans retrieved from the requested document.
+ */
+export interface QuestionAnswerResponse {
+  document_id: string;
+  question: string;
+  retrieval_query: string;
+  match_case: boolean;
+  answer_mode: "evidence_only";
+  status: "evidence_found" | "insufficient_evidence";
+  answer: string;
+  total_matches: number;
+  citations: EvidenceCitation[];
+}
