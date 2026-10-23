@@ -30,12 +30,12 @@ PDF + query
 
 | 层          | 职责                                                                                      | 当前状态                                                                                                                                                                                                                            |
 | ----------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api/`      | HTTP 路由、请求/响应模型                                                                  | health、文档管理（M0-04A）、证据搜索（M0-04B）、文件读取（M0-05A）、索引入口（M1-03A）、Chunk 检索（M1-02）、精确证据定位（M1-03B）、证据展示问答（无 LLM）                                                                         |
+| `api/`      | HTTP 路由、请求/响应模型                                                                  | health、文档管理（M0-04A）、证据搜索（M0-04B）、文件读取（M0-05A）、索引入口（M1-03A）、Chunk 检索（M1-02）、精确证据定位（M1-03B）、证据展示/生成式问答                                                                              |
 | `domain/`   | 与框架无关的领域模型（`AnchorHit`、`PdfRect`、`PageDescriptor`、`PageText`、`TextChunk`） | M0-03 已实现 `PdfRect` / `AnchorHit` / `PageDescriptor`；M1-01 已实现 `PageText` / `TextChunk`                                                                                                                                      |
-| `services/` | PDF 解析、文本抽取与切分、索引、检索、证据定位、问答、文档管理                            | M0-03 `search_anchors`；M0-04A `DocumentService`；M1-01 文本抽取与 Chunk 切分；M1-02 `ChunkRetrievalService`；M1-03A `DocumentIndexService`；M1-03B `EvidenceLocationService`；`QuestionAnswerService`（仅证据展示，无 LLM）        |
-| `infra/`    | 本地文件存储、SQLite 元数据仓储                                                           | M0-04A `DocumentRepository`；M1-01 新增页面文本、Chunk 与索引元数据表                                                                                                                                                               |
+| `services/` | PDF 解析、文本抽取与切分、索引、检索、证据定位、问答、文档管理                            | M0-03 `search_anchors`；M0-04A `DocumentService`；M1-01 文本抽取与 Chunk 切分；M1-02 `ChunkRetrievalService`；M1-03A `DocumentIndexService`；M1-03B `EvidenceLocationService`；`QuestionAnswerService`（两种模式，共用字面检索）         |
+| `infra/`    | 本地文件存储、SQLite 元数据仓储、可注入模型 Provider                                      | M0-04A `DocumentRepository`；M1-01 新增页面文本、Chunk 与索引元数据表；`infra/llm.py` 提供 OpenAI 兼容 HTTP Provider 与 Disabled Provider                                                                                            |
 
-运行时配置位于 `rag_anchor/config.py`（读取 `RAG_ANCHOR_DATA_DIR` 与 `RAG_ANCHOR_MAX_UPLOAD_BYTES`）。
+运行时配置位于 `rag_anchor/config.py`（读取 `RAG_ANCHOR_DATA_DIR`、`RAG_ANCHOR_MAX_UPLOAD_BYTES` 及 `RAG_ANCHOR_LLM_*`）。模型相关配置默认关闭：即使填写了地址，未设置 `RAG_ANCHOR_LLM_ENABLED=true` 也不会发起任何模型请求。
 
 依赖方向：`api → services → domain`，`infra` 只被 `services` 依赖。领域层不得 import FastAPI。
 
@@ -72,7 +72,7 @@ def search_anchors(
 | POST   | `/api/v1/documents/{document_id}/index`           | 建立或重建页面文本与 Chunk 索引（M1-03A）     |
 | POST   | `/api/v1/retrieval/search`                        | 在已索引 Chunk 中检索并返回来源偏移（M1-02）  |
 | POST   | `/api/v1/documents/{document_id}/evidence/locate` | 将页面文本 span 定位为真实 PDF 几何（M1-03B） |
-| POST   | `/api/v1/documents/{document_id}/qa`              | 单文档证据展示问答，返回可验证引用（无 LLM）  |
+| POST   | `/api/v1/documents/{document_id}/qa`              | 单文档问答：证据展示（默认）或 AI 生成，引用由服务端校验 |
 | GET    | `/api/v1/documents/{document_id}/file`            | 读取已上传 PDF 原始字节（内联展示）           |
 
 索引入口 `POST /documents/{document_id}/index` 只调用 `DocumentIndexService.index_document()`：PDF 哈希、文本抽取、Chunk 切分、来源校验与单事务原子替换旧索引均不在路由层重写。重复调用会重建索引，相同 PDF 与配置下最终 Chunk 集合一致，不是缓存命中；重建失败时保留原索引。
@@ -250,7 +250,7 @@ page_index / page_number / char_start / char_count / rects / bbox / page
 - 校验只读：不重新索引、不写数据库、不刷新 fingerprint。
 - 错误语义：404 文档不存在；422 请求项与存储文本/Chunk 不一致；409 未索引、索引与当前 PDF 不一致、span 无法精确映射或无真实几何；500 PDF 缺失或不可读。
 
-### 2.6 证据展示问答（无 LLM）
+### 2.6 问答：证据展示与生成式回答
 
 ```http
 POST /api/v1/documents/{document_id}/qa
@@ -263,24 +263,79 @@ POST /api/v1/documents/{document_id}/qa
   "question": "论文提出的方法有哪些特点？",
   "retrieval_query": "proposed method",
   "match_case": false,
-  "max_citations": 5
+  "max_citations": 5,
+  "answer_mode": "evidence_only"
 }
 ```
 
-- 当前**没有**语言模型、embedding、向量检索或 rerank。问答直接复用 M1-02 的字面 Chunk 检索，`retrieval_query` 是可选的检索原文；省略时使用 `question` 原文进行字面匹配。自然语言问题不会被语义理解。
-- 检索严格限定 `document_id`；引用只能来自该文档已持久化的 Chunk。
-- `answer_mode` 固定为 `evidence_only`。`answer` 是固定的、明确标注“未接入语言模型”的服务端说明，不是模型生成的结论。
-- 每条引用包含 `citation_id`、`document_id`、`chunk_id`、`page_index`、`page_number`、`match_start`、`match_end`、`hit_text`、`chunk_text`、`extraction_version`。偏移是 Python `str` 偏移，不包含 PDF 几何。
-- 点击引用时前端调用 M1-03B `POST /evidence/locate`，使用 `page_index + match_start + match_end + hit_text + chunk_id` 精确定位，并复用现有 PDF.js 高亮。
-- 没有命中时返回 HTTP 200，`status = "insufficient_evidence"`、`citations = []`，并明确说明无法依据文档回答。
-- 错误语义：404 文档不存在；409 文档尚未索引或索引版本不可用；422 请求非法。问答不写入数据库，也不修改索引。
+`answer_mode` 可选，默认 `evidence_only`，另一个合法值是 `grounded_generation`。
 
-### 2.7 前端（后续阶段）
+两种模式共享同一层检索与引用：
 
-- React + TypeScript + Vite + PDF.js。
+- 问答直接复用 M1-02 的字面 Chunk 检索。`retrieval_query` 是可选的检索原文；省略时使用 `question` 原文进行字面匹配。自然语言问题不会被语义理解。
+- 检索严格限定 `document_id`；引用只能来自该文档已持久化的 Chunk。服务端在返回前校验每个命中属于该文档，否则按内部错误处理，绝不跨文档泄露。
+- 服务端按返回顺序给证据分配 `E1`、`E2`…；所有引用字段（`document_id`、`chunk_id`、`page_index`、`page_number`、`match_start`、`match_end`、`hit_text`、`chunk_text`、`extraction_version`）来自存储索引，不来自模型输出。
+- 没有命中时返回 HTTP 200，`status = "insufficient_evidence"`、`citations = []`；两种模式都不会调用模型。
+- 点击引用时前端调用 M1-03B `POST /evidence/locate`，使用 `page_index + match_start + match_end + hit_text + chunk_id` 精确定位，并复用现有 PDF.js 高亮。问答接口本身不返回 PDF 几何。
+
+**`evidence_only`（默认）**
+
+- 不调用任何语言模型。
+- `status = "evidence_found"`；`answer` 是固定的服务端说明，明确标注“证据展示模式（未接入语言模型）”。
+- 保持与上一版本完全兼容：请求未提供 `answer_mode` 时行为不变。
+
+**`grounded_generation`（可选）**
+
+1. 完成同样的字面检索并构造服务端引用。
+2. 若没有证据，直接返回 `insufficient_evidence`，不调用模型。
+3. 将问题与服务端证据发送给可注入的 `LLMProvider`（默认实现为 OpenAI 兼容 `/chat/completions`）。
+4. 系统提示词与用户内容分离：`system` 只包含固定规则；`user` 是 JSON，包含 `question` 与 `evidence`（`id`、`page_number`、`text`）。PDF 文本被明确标记为不可信外部数据，其中的指令不得被执行。
+5. 模型只允许返回：
+
+```json
+{
+  "answer": "面向问题的自然语言回答。",
+  "citation_ids": ["E1", "E2"]
+}
+```
+
+6. 服务端拒绝未知/非法引用编号、非 JSON 输出、缺少 `answer`、超长回答等；引用按服务端记录重建，模型提供的页码、偏移、Chunk ID、文档 ID 或几何字段一律忽略。
+7. 若模型返回空 `citation_ids`，丢弃其文本并返回固定拒答，避免展示无证据支持的结论。
+8. 成功时 `status = "answered"`；引用只包含模型实际选择且通过校验的服务端证据。
+
+引用校验只保证“回答关联到本次检索到的真实证据”，**不保证回答中的每个事实正确**；提示词也无法消除幻觉，前端会明确提示需要人工核对。
+
+**错误语义**
+
+| 场景                                             | 状态码 |
+| ------------------------------------------------ | ------ |
+| 文档不存在                                       | 404    |
+| 请求非法（含未知 `answer_mode`）                 | 422    |
+| 文档尚未索引或索引提取版本不匹配                 | 409    |
+| 生成模式未启用/未配置（`LLMDisabledError`）      | 503    |
+| 模型请求超时                                     | 504    |
+| 模型服务 HTTP 失败、响应无法解析或引用校验失败   | 502    |
+| 检索返回跨文档引用（内部一致性错误）             | 500    |
+
+问答不写入数据库，也不修改索引。错误响应不会包含 API Key、模型请求体或服务器绝对路径。
+
+**模型接入状态**
+
+- 配置通过 `RAG_ANCHOR_LLM_*` 环境变量完成；默认 `RAG_ANCHOR_LLM_ENABLED=false`。
+- Provider 构造不探测网络；只有收到问答请求且两种前置条件都满足时才发送 HTTP。
+- 自动化测试只使用 Fake/Mock Provider；另已在本机 Ollama `qwen3:8b` 的 OpenAI 兼容端点完成少量真实联调。
+- Qwen3 默认 thinking 会先消耗输出 token，较小 `max_tokens` 下可能返回空 `content`。Ollama 端点接受 `reasoning_effort: "none"`；本服务通过 `RAG_ANCHOR_LLM_REASONING_EFFORT=none` 显式发送，未配置时不改变请求格式。
+- 本次联调仅覆盖单页测试 PDF 与少量问答场景，不代表其他模型、复杂文档或生产规模的质量。
+
+### 2.7 前端
+
+- 原生 TypeScript + Vite + PDF.js，不使用 React/Vue 或状态管理库。
 - PDF.js 负责 PDF 用户空间 → 画布像素的变换。
 - 前端消费后端返回的 PDF user space 绝对坐标；如需 CSS 百分比，由前端派生归一化坐标。
 - 缩放、翻页、旋转不改变已保存的几何数据。
+- 问答面板提供 `evidence_only` / `grounded_generation` 模式选择；每个异步请求都经过 request gate，切换文档、模式或重新索引会使旧响应失效。
+- 生成模式失败时只显示错误提示，不显示伪造的回答；引用点击仍走现有 `evidence/locate` 与高亮路径。
+- 所有服务端文本（包括模型输出与 PDF 内容）均以 `textContent` 渲染，不执行 HTML 或其中的指令。
 
 ## 3. 坐标与数据契约
 
@@ -306,8 +361,9 @@ backend/.data/                 # 可由 RAG_ANCHOR_DATA_DIR 覆盖
 
 ## 5. 非目标（第一版）
 
-- LLM 问答、自动生成锚点（现有证据展示问答不调用任何生成式模型）
-- embedding / 向量检索 / rerank
+- 仓库内置模型权重、推理框架或 GPU 推理（生成式问答通过 HTTP 调用外部 OpenAI 兼容服务，默认关闭）
+- embedding / 向量检索 / rerank / 查询改写 / 多轮对话 / 跨文档检索
+- 自动生成锚点（引用仍来自字面检索到的存储证据）
 - OCR、扫描件
 - GPU / PyTorch
 - 用户体系、多租户、对象存储、任务队列
@@ -328,4 +384,6 @@ backend/.data/                 # 可由 RAG_ANCHOR_DATA_DIR 覆盖
 | M1-02   | Chunk 检索 API：`POST /retrieval/search`（已完成）                            |
 | M1-03A  | 索引入口：`POST /documents/{id}/index`（已完成）                              |
 | M1-03B  | 精确证据定位：`POST /documents/{id}/evidence/locate`（已完成）                |
-| M0-05   | 前端 PDF.js 渲染与高亮（未开始）                                              |
+| M1-04   | 前端 Chunk 检索、证据问答与 PDF.js 高亮（已完成）                             |
+| M1-05   | 证据展示问答 MVP（已完成并提交）                                              |
+| M1-06   | 可选生成式问答应用侧接入、引用校验与前端模式选择（已完成；自动化 Mock + 本机 Ollama qwen3:8b 少量联调） |

@@ -1,6 +1,7 @@
 import { ApiError, RagAnchorApi } from "./api/client";
 import type {
   AnchorHit,
+  AnswerMode,
   DocumentIndexResponse,
   DocumentSummary,
   EvidenceCitation,
@@ -21,6 +22,7 @@ import {
   citationLabel,
   toCitationEvidenceSpan,
 } from "./qa/citation";
+import { answerModeLabel, generationFailureMessage } from "./qa/mode";
 import {
   CHUNK_PAGE_SIZE,
   chunkEmptyMessage,
@@ -72,11 +74,14 @@ const chunkNext = byId<HTMLButtonElement>("chunk-next");
 const chunkResults = byId<HTMLDivElement>("chunk-results");
 
 const qaForm = byId<HTMLFormElement>("qa-form");
+const qaMode = byId<HTMLSelectElement>("qa-mode");
+const qaModeNote = byId<HTMLSpanElement>("qa-mode-note");
 const qaQuestion = byId<HTMLTextAreaElement>("qa-question");
 const qaQuery = byId<HTMLInputElement>("qa-query");
 const qaSubmit = byId<HTMLButtonElement>("qa-submit");
 const qaHint = byId<HTMLParagraphElement>("qa-hint");
 const qaAnswer = byId<HTMLDivElement>("qa-answer");
+const qaAnswerMode = byId<HTMLParagraphElement>("qa-answer-mode");
 const qaAnswerText = byId<HTMLParagraphElement>("qa-answer-text");
 const qaCitations = byId<HTMLDivElement>("qa-citations");
 
@@ -660,6 +665,31 @@ function resetChunkState(): void {
   renderChunkResults();
 }
 
+function currentQaMode(): AnswerMode {
+  return qaMode.value === "grounded_generation"
+    ? "grounded_generation"
+    : "evidence_only";
+}
+
+function updateQaModeNote(): void {
+  qaModeNote.textContent =
+    currentQaMode() === "grounded_generation"
+      ? "调用已配置的模型；引用由服务端校验，结论需人工核对"
+      : "不调用语言模型，仅返回原文证据";
+}
+
+function qaIdleHint(): string {
+  if (!selectedId) {
+    return "请先选择一个文档。";
+  }
+  if (indexedDocumentId !== selectedId) {
+    return "请先建立索引后再提问。";
+  }
+  return currentQaMode() === "grounded_generation"
+    ? "已建立索引。AI 生成会调用已配置的模型服务；引用由服务端校验。"
+    : "已建立索引，可以提问。仅展示原文证据，不生成结论。";
+}
+
 function resetQaState(): void {
   qaGate.begin();
   locateGate.begin();
@@ -667,27 +697,29 @@ function resetQaState(): void {
   qaActiveIndex = -1;
   qaInFlight = false;
   qaAnswer.hidden = true;
+  qaAnswerMode.textContent = answerModeLabel(currentQaMode());
   qaAnswerText.textContent = "";
   qaCitations.replaceChildren();
   qaHint.className = "search-hint";
-  if (!selectedId) {
-    qaHint.textContent = "请先选择一个文档。";
-  } else if (indexedDocumentId !== selectedId) {
-    qaHint.textContent = "请先建立索引后再提问。";
-  } else {
-    qaHint.textContent = "已建立索引，可以提问。仅展示原文证据，不生成结论。";
-  }
+  qaHint.textContent = qaIdleHint();
   updateQaAvailability();
 }
 
 function updateQaAvailability(): void {
   const indexed = Boolean(selectedId) && indexedDocumentId === selectedId;
+  qaMode.disabled = qaInFlight;
   qaSubmit.disabled =
     !indexed ||
     indexInFlight ||
     qaInFlight ||
     qaQuestion.value.trim().length === 0;
-  qaSubmit.textContent = qaInFlight ? "检索中…" : "提问";
+  if (qaInFlight) {
+    qaSubmit.textContent =
+      currentQaMode() === "grounded_generation" ? "生成中…" : "检索中…";
+  } else {
+    qaSubmit.textContent =
+      currentQaMode() === "grounded_generation" ? "生成回答" : "提问";
+  }
 }
 
 function updateIndexAvailability(): void {
@@ -744,8 +776,7 @@ async function performIndex(): Promise<void> {
     indexStats = stats;
     indexStatus.textContent = "已索引";
     qaHint.className = "search-hint";
-    qaHint.textContent =
-      "索引已就绪，可以提问。仅展示原文证据，不生成结论。";
+    qaHint.textContent = qaIdleHint();
     showToast(
       `已建立索引：${stats.page_count} 页 · ${stats.chunk_count} 个 Chunk。`,
       "success"
@@ -1017,28 +1048,38 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
   }
 
   const retrievalQuery = qaQuery.value.trim();
+  const mode = currentQaMode();
   const token = qaGate.begin();
   locateGate.begin();
   qaInFlight = true;
   qaCitationItems = [];
   qaActiveIndex = -1;
   qaAnswer.hidden = true;
+  qaAnswerMode.textContent = answerModeLabel(mode);
   qaAnswerText.textContent = "";
   qaCitations.replaceChildren();
   qaHint.className = "search-hint is-info";
-  qaHint.textContent = "正在检索原文证据…";
+  qaHint.textContent =
+    mode === "grounded_generation"
+      ? "正在生成回答（引用将由服务端校验）…"
+      : "正在检索原文证据…";
   updateQaAvailability();
 
   try {
     const response = await api.askQuestion(documentId, {
       question,
       retrievalQuery: retrievalQuery || undefined,
+      answerMode: mode,
     });
-    if (!qaGate.isCurrent(token) || selectedId !== documentId) {
+    if (
+      !qaGate.isCurrent(token) ||
+      selectedId !== documentId ||
+      currentQaMode() !== mode
+    ) {
       return;
     }
-    if (response.answer_mode !== "evidence_only") {
-      throw new Error("后端返回了不支持的问答模式。");
+    if (response.answer_mode !== mode) {
+      throw new Error("后端返回了与请求不一致的问答模式。");
     }
 
     qaInFlight = false;
@@ -1050,7 +1091,15 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
 
     if (response.status === "insufficient_evidence") {
       qaHint.className = "search-hint";
-      qaHint.textContent = "没有找到可支持回答的原文证据，已明确拒答。";
+      qaHint.textContent =
+        mode === "grounded_generation"
+          ? "模型未返回可验证的原文证据引用，系统已明确拒答。"
+          : "没有找到可支持回答的原文证据，已明确拒答。";
+    } else if (mode === "grounded_generation") {
+      qaHint.className = "search-hint is-info";
+      qaHint.textContent = `AI 生成完成：按字面「${response.retrieval_query}」检索到 ${
+        response.total_matches
+      } 条证据，引用 ${response.citations.length} 条。引用编号已校验，结论请核对原文。`;
     } else {
       qaHint.className = "search-hint is-info";
       qaHint.textContent = `按字面「${response.retrieval_query}」找到 ${
@@ -1058,7 +1107,11 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
       } 条证据，返回 ${response.citations.length} 条引用。`;
     }
   } catch (error) {
-    if (!qaGate.isCurrent(token) || selectedId !== documentId) {
+    if (
+      !qaGate.isCurrent(token) ||
+      selectedId !== documentId ||
+      currentQaMode() !== mode
+    ) {
       return;
     }
     qaInFlight = false;
@@ -1067,11 +1120,21 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
     qaAnswer.hidden = true;
     qaAnswerText.textContent = "";
     renderQaCitations();
+    const status = error instanceof ApiError ? error.status : 0;
+    const fallback = friendlyError(error);
+    const message =
+      mode === "grounded_generation"
+        ? generationFailureMessage(status) ?? fallback
+        : fallback;
     qaHint.className = "search-hint is-error";
-    qaHint.textContent = friendlyError(error);
-    showToast(friendlyError(error), "error");
+    qaHint.textContent = message;
+    showToast(message, "error");
   } finally {
-    if (qaGate.isCurrent(token) && selectedId === documentId) {
+    if (
+      qaGate.isCurrent(token) &&
+      selectedId === documentId &&
+      currentQaMode() === mode
+    ) {
       qaInFlight = false;
       updateQaAvailability();
     }
@@ -1446,12 +1509,20 @@ qaQuestion.addEventListener("input", () => {
   updateQaAvailability();
 });
 
+qaMode.addEventListener("change", () => {
+  updateQaModeNote();
+  // A different mode must not inherit citations or answers from the previous
+  // one, and any in-flight request belongs to the old mode.
+  resetQaState();
+});
+
 /* ---------- Bootstrap ---------- */
 
 window.addEventListener("beforeunload", () => {
   viewer.destroy();
 });
 
+updateQaModeNote();
 documentCount.textContent = "0";
 renderResults();
 renderChunkResults();

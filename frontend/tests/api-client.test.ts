@@ -478,6 +478,7 @@ describe("RagAnchorApi.askQuestion", () => {
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body))).toEqual({
       question: "What does the document say?",
+      answer_mode: "evidence_only",
       match_case: false,
       max_citations: 5,
       retrieval_query: "quick",
@@ -497,9 +498,49 @@ describe("RagAnchorApi.askQuestion", () => {
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(String(init?.body))).toEqual({
       question: "What does the document say?",
+      answer_mode: "evidence_only",
       match_case: false,
       max_citations: 5,
     });
+  });
+
+  it("requests grounded generation when that mode is selected", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(questionAnswer));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.askQuestion(documentSummary.document_id, {
+      question: "quick",
+      answerMode: "grounded_generation",
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(init?.body))).toEqual({
+      question: "quick",
+      answer_mode: "grounded_generation",
+      match_case: false,
+      max_citations: 5,
+    });
+  });
+
+  it("surfaces a 503 when grounded generation is not configured", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        jsonResponse(
+          { detail: "Grounded generation is not enabled" },
+          503
+        )
+      )
+    );
+
+    await expect(
+      api.askQuestion(documentSummary.document_id, {
+        question: "quick",
+        answerMode: "grounded_generation",
+      })
+    ).rejects.toMatchObject({ name: "ApiError", status: 503 });
   });
 
   it("surfaces a 409 when the document has no index", async () => {

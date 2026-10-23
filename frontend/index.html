@@ -189,9 +189,18 @@
           <section class="panel qa-panel" aria-label="证据问答">
             <div class="panel-heading">
               <h2>证据问答</h2>
-              <span class="panel-hint">证据展示 · 无 LLM</span>
+              <span class="panel-hint">证据展示 / AI 生成 · 引用校验</span>
             </div>
             <form class="search-form" id="qa-form">
+              <label class="field-label" for="qa-mode">回答模式</label>
+              <select class="qa-mode" id="qa-mode">
+                <option value="evidence_only" selected>
+                  证据展示（不调用语言模型）
+                </option>
+                <option value="grounded_generation">
+                  AI 生成回答（需已配置模型服务）
+                </option>
+              </select>
               <label class="field-label" for="qa-question">问题</label>
               <textarea
                 id="qa-question"
@@ -210,7 +219,9 @@
                 spellcheck="false"
               />
               <div class="qa-controls">
-                <span class="panel-hint">不调用语言模型，仅返回原文证据</span>
+                <span class="panel-hint" id="qa-mode-note"
+                  >不调用语言模型，仅返回原文证据</span
+                >
                 <button
                   class="primary-button"
                   id="qa-submit"
@@ -225,7 +236,9 @@
               请先选择一个文档并建立索引。
             </p>
             <div class="qa-answer" id="qa-answer" hidden aria-live="polite">
-              <p class="qa-answer-mode">证据展示模式 · 未接入语言模型</p>
+              <p class="qa-answer-mode" id="qa-answer-mode">
+                证据展示模式 · 未接入语言模型
+              </p>
               <p class="qa-answer-text" id="qa-answer-text"></p>
             </div>
             <div class="qa-citations" id="qa-citations"></div>

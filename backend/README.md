@@ -1,6 +1,6 @@
 # RAG-AnchorLab Backend
 
-独立 uv 项目（Python 3.11），FastAPI 后端。当前提供健康检查、PDF 文档管理、证据搜索与 PDF 文件读取接口。
+独立 uv 项目（Python 3.11），FastAPI 后端。当前提供健康检查、PDF 文档管理、证据搜索、索引与字面 Chunk 检索、精确证据定位、证据展示/生成式问答与 PDF 文件读取接口。生成式问答默认关闭，只有显式配置模型服务后才可用。
 
 ## 命令
 
@@ -25,6 +25,22 @@ uv lock --check
 
 上传大小默认上限 20 MiB，可用 `RAG_ANCHOR_MAX_UPLOAD_BYTES` 覆盖。
 
+生成式问答（可选）环境变量：
+
+| 变量                                 | 默认值  | 说明                                           |
+| ------------------------------------ | ------- | ---------------------------------------------- |
+| `RAG_ANCHOR_LLM_ENABLED`             | `false` | 必须为 `1/true/yes/on` 才启用                  |
+| `RAG_ANCHOR_LLM_BASE_URL`            | 空      | OpenAI 兼容服务根地址（`http(s)://`）          |
+| `RAG_ANCHOR_LLM_MODEL`               | 空      | 模型名称，不是本地文件路径                     |
+| `RAG_ANCHOR_LLM_API_KEY`             | 空      | 可选；只从环境变量读取，不写入日志或响应       |
+| `RAG_ANCHOR_LLM_TIMEOUT_SECONDS`     | `60`    | 单次请求超时                                   |
+| `RAG_ANCHOR_LLM_MAX_OUTPUT_TOKENS`   | `512`   | 输出 token 上限                                |
+| `RAG_ANCHOR_LLM_REASONING_EFFORT`    | 空      | 可选 `none/low/medium/high`；Qwen3 联调建议 `none` |
+
+未启用或缺少地址/模型时，生成模式返回 503；Provider 构造阶段不探测网络，也不会在导入时发起请求。
+
+Qwen3 等 thinking 模型默认可能先输出推理内容，在较小的 `max_tokens` 下导致 `content` 为空。Ollama 的 OpenAI 兼容端点可通过请求字段 `reasoning_effort: "none"` 关闭 thinking；本服务仅在显式设置 `RAG_ANCHOR_LLM_REASONING_EFFORT=none` 时发送该字段，未设置时保持原请求格式。
+
 ## 接口
 
 | 方法   | 路径                                             | 说明                                        |
@@ -37,6 +53,8 @@ uv lock --check
 | POST   | `/api/v1/documents/{document_id}/anchors/search` | 检索证据文字并返回全部命中位置              |
 | POST   | `/api/v1/documents/{document_id}/index`          | 建立或重建可追溯的页面文本与 Chunk 索引     |
 | POST   | `/api/v1/retrieval/search`                       | 在已索引 Chunk 中检索并返回来源偏移         |
+| POST   | `/api/v1/documents/{document_id}/evidence/locate` | 将检索 span 定位为真实 PDF 几何            |
+| POST   | `/api/v1/documents/{document_id}/qa`             | 证据展示（默认）或 AI 生成问答，引用由服务端校验 |
 | GET    | `/api/v1/documents/{document_id}/file`           | 读取已上传 PDF 原始字节（inline）           |
 
 ### 证据搜索
@@ -140,6 +158,62 @@ Content-Type: application/json
 - `start_offset` / `end_offset` 是 Chunk 在页面文本中的 Python 字符串偏移；`match_start` / `match_end` 是命中在同一页面文本中的偏移。它们都不是 PDF 坐标。
 - 检索只读已持久化的 Chunk，不解析 PDF、不建立索引、不写数据库。
 
+### 问答
+
+```http
+POST /api/v1/documents/{document_id}/qa
+Content-Type: application/json
+
+{
+  "question": "论文提出的方法有哪些特点？",
+  "retrieval_query": "proposed method",
+  "match_case": false,
+  "max_citations": 5,
+  "answer_mode": "evidence_only"
+}
+```
+
+- `answer_mode` 可选：`evidence_only`（默认，不调用语言模型）或 `grounded_generation`（可选，需配置模型服务）。
+- 两种模式都先做单文档字面 Chunk 检索；自然语言问题不会被语义理解。
+- 无命中时返回 HTTP 200、`status = "insufficient_evidence"`、`citations = []`，且不调用模型。
+- 证据展示模式返回 `status = "evidence_found"` 与服务端固定说明。
+- 生成模式把服务端证据（`E1`、`E2`…）交给模型；模型只能返回 `answer` 与 `citation_ids`。未知编号、非法 JSON、超长或空回答会被拒绝；引用字段全部按服务端记录重建。
+- 模型返回空 `citation_ids` 时丢弃其文本，返回 `insufficient_evidence`。
+- 引用不包含 PDF 几何；点击引用需调用 `POST /evidence/locate`。
+- 错误语义：404 文档不存在；409 未索引；422 请求非法；503 生成模式未启用/未配置；504 模型超时；502 模型服务失败或响应无法校验。
+
+响应示例（生成模式成功）：
+
+```json
+{
+  "document_id": "6f1c9e2a-1b2c-4d5e-8f90-123456789abc",
+  "question": "论文提出的方法有哪些特点？",
+  "retrieval_query": "proposed method",
+  "match_case": false,
+  "answer_mode": "grounded_generation",
+  "status": "answered",
+  "answer": "模型生成的回答……",
+  "total_matches": 3,
+  "citations": [
+    {
+      "citation_id": "E1",
+      "document_id": "6f1c9e2a-1b2c-4d5e-8f90-123456789abc",
+      "chunk_id": "chk_...",
+      "page_index": 0,
+      "page_number": 1,
+      "chunk_index": 0,
+      "match_start": 120,
+      "match_end": 135,
+      "hit_text": "proposed method",
+      "chunk_text": "...",
+      "extraction_version": "v1"
+    }
+  ]
+}
+```
+
+引用校验只保证回答关联到真实检索证据，不保证回答内容正确。已使用本机 Ollama `qwen3:8b`（OpenAI 兼容端点）完成少量真实联调；Qwen3 默认 thinking 会占用输出 token，联调时设置 `RAG_ANCHOR_LLM_REASONING_EFFORT=none`。自动化测试仍只使用 Fake/Mock Provider。
+
 ### 文件读取
 
 ```http
@@ -179,6 +253,10 @@ curl -OJ http://127.0.0.1:8000/api/v1/documents/<document_id>/file
 | 索引时 PDF 缺失或不可读            | 500    | `Stored PDF is missing or unreadable`        |
 | 索引时 PDF 无法抽取文本            | 500    | `Stored PDF could not be indexed`            |
 | 索引写入 SQLite 失败               | 500    | `Document index could not be stored`         |
+| 问答时文档未索引/索引版本不可用    | 409    | `Document has not been indexed` 等           |
+| 生成模式未启用或未配置             | 503    | `Grounded generation ...`                    |
+| 模型请求超时                       | 504    | `LLM request timed out`                      |
+| 模型服务失败或引用校验失败         | 502    | `LLM service request failed` 等              |
 
 错误响应不会包含服务器绝对路径、存储目录或内部堆栈。
 
@@ -199,3 +277,5 @@ curl -OJ http://127.0.0.1:8000/api/v1/documents/<document_id>/file
 - 不使用系统 Python 或 CALF 环境。
 - PDF 引擎优先 `pypdfium2`；PyMuPDF 在许可证确认前不安装。
 - 测试 PDF 在运行时动态生成，不提交二进制 PDF。
+- 模型测试只注入 Fake/Mock Provider，不使用真实网络、模型权重或 GPU；`models/` 与常见权重/密钥文件不提交 Git。
+- Mock 结果不得描述为真实生成效果；本机 Ollama 的少量联调结果也只代表该模型与当前测试样本。

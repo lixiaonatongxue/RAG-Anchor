@@ -45,6 +45,18 @@ backend/.data/
 *.upload
 *.tmp
 
+# ---- 本地模型权重、缓存与密钥（绝不入库） ----
+models/
+*.safetensors
+*.gguf
+*.onnx
+*.ckpt
+*.pth
+*.pt
+secrets/
+*.key
+*.pem
+
 # ---- 日志与调试产物 ----
 *.log
 .snow/

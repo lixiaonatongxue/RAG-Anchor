@@ -1,4 +1,4 @@
-"""Evidence-only question answering endpoint."""
+"""Question answering endpoint with optional grounded generation."""
 
 from __future__ import annotations
 
@@ -12,8 +12,15 @@ from rag_anchor.api.schemas import (
     QuestionRequest,
     QuestionResponse,
 )
+from rag_anchor.infra.llm import (
+    LLMDisabledError,
+    LLMResponseError,
+    LLMServiceError,
+    LLMTimeoutError,
+)
 from rag_anchor.services.document_service import DocumentNotFoundError
 from rag_anchor.services.qa_service import (
+    GeneratedAnswerError,
     QuestionAnswerService,
     QuestionCitationScopeError,
     QuestionIndexUnavailableError,
@@ -36,18 +43,22 @@ def answer_question(
     payload: QuestionRequest,
     service: QuestionServiceDep,
 ) -> QuestionResponse:
-    """Return literal retrieval citations for one question.
+    """Return evidence-only citations or a grounded generated answer.
 
-    This endpoint does not call a language model. ``answer`` is a fixed,
-    explicitly labelled notice, and every citation is a retrieved page-text
-    span scoped to ``document_id``. The caller must locate a citation through
-    ``POST /documents/{document_id}/evidence/locate`` before drawing it.
+    ``evidence_only`` (the default) never calls a language model.
+    ``grounded_generation`` sends the retrieved evidence to the configured
+    provider and validates the returned citation IDs server-side. In both
+    modes the citation fields come from the stored index, and callers must use
+    ``POST /documents/{document_id}/evidence/locate`` before drawing geometry.
 
     Error contract:
 
-    * 404 — the document has no metadata row.
-    * 409 — the document has no usable chunk index.
-    * 422 — the payload is invalid.
+    * 404 - the document has no metadata row.
+    * 409 - the document has no usable chunk index.
+    * 422 - the payload is invalid.
+    * 502 - the model service failed or its output could not be verified.
+    * 503 - grounded generation is disabled or not configured.
+    * 504 - the model request timed out.
     """
     try:
         result = service.answer(
@@ -56,6 +67,7 @@ def answer_question(
             retrieval_query=payload.retrieval_query,
             match_case=payload.match_case,
             max_citations=payload.max_citations,
+            answer_mode=payload.answer_mode,
         )
     except DocumentNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Document not found") from exc
@@ -64,6 +76,17 @@ def answer_question(
     except ValueError as exc:
         # Defensive: the request model normally rejects these values first.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LLMDisabledError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except LLMTimeoutError as exc:
+        raise HTTPException(status_code=504, detail="LLM request timed out") from exc
+    except LLMServiceError as exc:
+        raise HTTPException(status_code=502, detail="LLM service request failed") from exc
+    except (LLMResponseError, GeneratedAnswerError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="LLM response could not be verified",
+        ) from exc
     except QuestionCitationScopeError as exc:
         raise HTTPException(
             status_code=500,

@@ -14,6 +14,7 @@ from rag_anchor.api.evidence import router as evidence_router
 from rag_anchor.api.qa import router as qa_router
 from rag_anchor.api.retrieval import router as retrieval_router
 from rag_anchor.config import Settings
+from rag_anchor.infra.llm import LLMProvider, build_llm_provider
 from rag_anchor.services.document_service import DocumentService
 from rag_anchor.services.evidence_service import EvidenceLocationService
 from rag_anchor.services.index_service import DocumentIndexService
@@ -30,18 +31,32 @@ class HealthResponse(BaseModel):
     version: str
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    llm_provider: LLMProvider | None = None,
+) -> FastAPI:
     """Build and return the FastAPI application.
 
     Filesystem and database setup happens in the lifespan handler, not at
-    import time, so importing the module has no side effects.
+    import time, so importing the module has no side effects. The optional
+    ``llm_provider`` is an injection point for offline tests; production uses
+    the provider built from environment settings, which is disabled by
+    default and never probed during construction.
     """
     resolved_settings = settings or Settings.from_env()
     document_service = DocumentService(resolved_settings)
     index_service = DocumentIndexService(document_service)
     retrieval_service = ChunkRetrievalService(document_service)
     evidence_service = EvidenceLocationService(document_service)
-    question_service = QuestionAnswerService(document_service, retrieval_service)
+    resolved_llm_provider = (
+        llm_provider if llm_provider is not None else build_llm_provider(resolved_settings.llm)
+    )
+    question_service = QuestionAnswerService(
+        document_service,
+        retrieval_service,
+        resolved_llm_provider,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:

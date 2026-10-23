@@ -150,18 +150,33 @@ export interface EvidenceCitation {
 }
 
 /**
- * Evidence-only question answer.
+ * Question-answering modes.
  *
- * `answer` is a fixed server notice, not model output. `citations` contains
- * only spans retrieved from the requested document.
+ * `evidence_only` never calls a model. `grounded_generation` sends retrieved
+ * evidence to a configured model and validates its citation IDs server-side.
+ */
+export type AnswerMode = "evidence_only" | "grounded_generation";
+
+export type QuestionStatus =
+  | "evidence_found"
+  | "insufficient_evidence"
+  | "answered";
+
+/**
+ * One question answer.
+ *
+ * In `evidence_only` mode `answer` is a fixed server notice. In
+ * `grounded_generation` mode it is model text whose citation IDs were
+ * validated by the server; that does not prove every sentence is supported.
+ * `citations` always contains server-owned spans from the requested document.
  */
 export interface QuestionAnswerResponse {
   document_id: string;
   question: string;
   retrieval_query: string;
   match_case: boolean;
-  answer_mode: "evidence_only";
-  status: "evidence_found" | "insufficient_evidence";
+  answer_mode: AnswerMode;
+  status: QuestionStatus;
   answer: string;
   total_matches: number;
   citations: EvidenceCitation[];

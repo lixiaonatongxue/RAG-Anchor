@@ -253,16 +253,17 @@ class EvidenceLocateResponse(BaseModel):
 class QuestionRequest(BaseModel):
     """One question scoped to an indexed document.
 
-    There is no semantic retrieval or language model in this MVP. ``question``
-    is echoed back and displayed; retrieval is literal. ``retrieval_query``
-    optionally supplies the literal text to search and defaults to the
-    question itself when omitted.
+    Retrieval is always literal; no semantic interpretation is performed.
+    ``answer_mode`` defaults to ``evidence_only``, preserving the existing
+    no-model behavior. ``grounded_generation`` only calls a model when the
+    server is explicitly configured and enabled.
     """
 
     question: str = Field(min_length=1, max_length=MAX_QUESTION_LENGTH)
     retrieval_query: str | None = Field(default=None, max_length=MAX_QUERY_LENGTH)
     match_case: bool = False
     max_citations: int = Field(default=DEFAULT_MAX_CITATIONS, ge=1, le=MAX_CITATIONS)
+    answer_mode: Literal["evidence_only", "grounded_generation"] = "evidence_only"
 
     @field_validator("question")
     @classmethod
@@ -303,18 +304,21 @@ class EvidenceCitationResponse(BaseModel):
 
 
 class QuestionResponse(BaseModel):
-    """Evidence-only answer plus its independently verifiable citations.
+    """Answer plus independently verifiable citations.
 
-    ``answer`` is a fixed, explicitly labelled notice, never model output.
-    Every citation comes from the persisted chunk index of ``document_id``.
+    In ``evidence_only`` mode ``answer`` is a fixed server notice. In
+    ``grounded_generation`` mode it is model text whose citation IDs were
+    validated by the server; that does not prove every sentence is supported.
+    Every citation itself is reconstructed from the persisted chunk index of
+    ``document_id``, never from model output.
     """
 
     document_id: UUID
     question: str
     retrieval_query: str
     match_case: bool
-    answer_mode: Literal["evidence_only"]
-    status: Literal["evidence_found", "insufficient_evidence"]
+    answer_mode: Literal["evidence_only", "grounded_generation"]
+    status: Literal["evidence_found", "insufficient_evidence", "answered"]
     answer: str
     total_matches: int = Field(ge=0)
     citations: list[EvidenceCitationResponse]

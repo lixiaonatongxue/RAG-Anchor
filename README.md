@@ -28,7 +28,7 @@ search_anchors(pdf_path: str | Path, query: str, *, match_case: bool = True) -> 
 
 ## 当前阶段
 
-**M1：可追溯检索、精确证据定位与证据展示问答（无 LLM）**。
+**M1：可追溯检索、精确证据定位与证据问答（默认无 LLM，可选生成式模式）**。
 
 已实现：
 
@@ -42,11 +42,14 @@ search_anchors(pdf_path: str | Path, query: str, *, match_case: bool = True) -> 
 - 点击任意命中后自动定位并居中；同页与跨页均支持，缩放后高亮位置按当前 viewport 重新计算
 - Chunk 索引、字面 Chunk 检索、Python 字符串偏移与来源一致性校验
 - `evidence/locate`：把检索 span 映射为真实 PDFium 字符区间与逐行几何矩形
-- 证据展示问答：单文档字面检索 → 可验证引用列表 → 点击引用复用 `evidence/locate` 与 PDF.js 高亮
-- 无相关证据时明确拒答；不调用语言模型，不生成无引用的事实
-- Vitest 单元测试：API client、高亮坐标转换、命中居中滚动、检索引用与问答交互
+- 证据展示问答（默认）：单文档字面检索 → 可验证引用列表 → 点击引用复用 `evidence/locate` 与 PDF.js 高亮；不调用语言模型
+- 可选 AI 生成问答：同一份检索证据 → 可配置的 OpenAI 兼容模型服务 → 服务端只接受模型返回的证据编号 → 引用字段全部由服务端重建
+- 两种模式在无相关证据时都明确拒答；生成模式未配置或不可用时返回明确错误，不伪造成功
+- Vitest 单元测试：API client、高亮坐标转换、命中居中滚动、检索引用、问答模式与错误提示、旧请求失效
+- 后端 Mock Provider 测试覆盖引用校验、未知编号拒绝、非法 JSON、超时/连接失败与提示词注入隔离；自动化测试不调用真实模型
+- 已使用本机 Ollama `qwen3:8b` 完成少量真实联调（少量请求、单页测试 PDF）；不代表其他模型或大规模生成质量
 
-本地开发 MVP：**无认证、无速率限制、无 OCR、无 LLM/向量数据库**。问答为**证据展示模式**，不是生成式 RAG。
+本地开发 MVP：**无认证、无速率限制、无 OCR、无 embedding/向量数据库**。问答默认是**证据展示模式**；只有显式启用并配置模型服务后才可使用 `grounded_generation`。Mock 测试与本机少量联调均不代表生产质量。
 
 ## 技术栈
 
@@ -57,7 +60,7 @@ search_anchors(pdf_path: str | Path, query: str, *, match_case: bool = True) -> 
 | 解析 | `pypdfium2` + PDFium；PyMuPDF 在许可证确认前不安装                |
 | 存储 | 本地文件系统 + SQLite 元数据                                      |
 
-前端不使用 React/Vue、UI 组件库或状态管理库。第一版不接入 LLM、向量数据库、OCR、PyTorch 或 GPU。
+前端不使用 React/Vue、UI 组件库或状态管理库。仓库内不包含模型权重、推理框架、向量数据库、OCR、PyTorch 或 GPU 代码；生成式模式通过 HTTP 调用外部 OpenAI 兼容服务，默认关闭。
 
 ## 目录结构
 
@@ -148,10 +151,14 @@ VITE_API_PROXY_TARGET=http://127.0.0.1:9000
 6. 点击任意命中项，阅读器跳到对应页并高亮该命中，同时将命中位置滚动到阅读器视口中央（同页与跨页均支持）；其他命中使用另一种颜色。
 7. 使用「上一命中 / 下一命中」在所有命中之间循环切换。
 8. 使用翻页、页码输入、放大、缩小、适合宽度查看细节；缩放后命中高亮会按当前 viewport 重新计算位置。
-9. 在「证据问答」中输入问题；由于当前是字面检索，可另填文档中出现的检索关键词（留空则使用问题原文）。
-10. 点击「提问」后，系统只返回匹配的原文证据和引用列表，并明确标注“证据展示模式，未接入语言模型”；没有证据时会明确拒答。
-11. 点击任意引用（如 `E1`），前端使用 `evidence/locate` 验证 span 并跳转、高亮原始 PDF；定位失败时不会搜索文字或绘制近似高亮。
-12. 悬停文档卡片右上角可删除文档（会二次确认）。
+9. 在问答面板中选择回答模式：
+   - **证据展示（不调用语言模型）**：默认模式，始终可用。
+   - **AI 生成回答（需已配置模型服务）**：仅在环境变量启用并配置模型后可用。
+10. 输入问题；由于检索仍是字面匹配，可另填文档中出现的检索关键词（留空则使用问题原文）。
+11. 证据展示模式只返回匹配的原文证据和引用列表，并明确标注“证据展示模式，未接入语言模型”；没有证据时明确拒答。
+12. AI 生成模式会用同一份证据调用模型，仅接受服务端分配的引用编号（`E1`、`E2`…）；模型输出非法或引用未知编号时返回错误，不展示该回答。模型未配置时返回 503 提示，不会伪造成功。
+13. 点击任意引用（如 `E1`），前端使用 `evidence/locate` 验证 span 并跳转、高亮原始 PDF；定位失败时不会搜索文字或绘制近似高亮。
+14. 悬停文档卡片右上角可删除文档（会二次确认）。
 
 ## API 概览
 
@@ -167,7 +174,7 @@ VITE_API_PROXY_TARGET=http://127.0.0.1:9000
 | `POST`   | `/api/v1/documents/{document_id}/index`          | 建立或重建 Chunk 索引               |
 | `POST`   | `/api/v1/retrieval/search`                       | 在已索引 Chunk 中检索并返回来源偏移 |
 | `POST`   | `/api/v1/documents/{document_id}/evidence/locate` | 将检索 span 定位为真实 PDF 几何     |
-| `POST`   | `/api/v1/documents/{document_id}/qa`              | 证据展示问答，返回可验证引用（无 LLM） |
+| `POST`   | `/api/v1/documents/{document_id}/qa`              | 证据展示（默认）或 AI 生成问答，引用由服务端校验 |
 
 最小后端链路：
 
@@ -181,6 +188,41 @@ POST /api/v1/retrieval/search               # 在索引中检索
 
 搜索响应中的 `rects` 是 **absolute PDF user space**（points），前端通过 PDF.js viewport 映射到屏幕坐标。坐标语义见 [ADR-0001](docs/adr/0001-coordinate-contract.md)。
 
+## 生成式问答配置（可选）
+
+`grounded_generation` 默认关闭。仅配置地址不会触发任何网络请求；必须同时显式启用。
+
+| 环境变量                        | 必填 | 默认值 | 说明                                             |
+| ------------------------------- | ---- | ------ | ------------------------------------------------ |
+| `RAG_ANCHOR_LLM_ENABLED`        | 是   | `false` | `1/true/yes/on` 才启用生成模式                  |
+| `RAG_ANCHOR_LLM_BASE_URL`       | 是   | 空     | OpenAI 兼容服务根地址，必须为 `http(s)://...`   |
+| `RAG_ANCHOR_LLM_MODEL`          | 是   | 空     | 请求体中的模型名称，不是本地文件路径             |
+| `RAG_ANCHOR_LLM_API_KEY`        | 否   | 空     | 设置后以 `Authorization: Bearer ...` 发送        |
+| `RAG_ANCHOR_LLM_TIMEOUT_SECONDS`| 否   | `60`   | 单次请求超时（秒）                               |
+| `RAG_ANCHOR_LLM_MAX_OUTPUT_TOKENS` | 否 | `512`  | 单次生成输出 token 上限                          |
+| `RAG_ANCHOR_LLM_REASONING_EFFORT` | 否 | 空   | 可选 `none/low/medium/high`；Qwen3 本地联调建议 `none`，空值不发送该字段 |
+
+说明：
+
+- 服务端通过 `POST {BASE_URL}/chat/completions` 调用模型，使用标准库 `urllib`，不新增依赖。
+- API Key 仅从环境变量读取，不写入日志、错误响应或 Git；`.gitignore` 忽略 `models/` 与常见模型权重/密钥文件。
+- 未启用、未配置或连接失败时，接口分别返回 503 / 502 / 504，不会返回固定模板伪装成生成成功。
+- 检索始终是单文档字面匹配；不做 embedding、向量检索、rerank、查询改写、多轮对话或跨文档检索。
+- 服务端给检索证据分配 `E1`、`E2`…，模型只能返回 `answer` 与 `citation_ids`；页码、偏移、Chunk ID、文档 ID 和 PDF 几何全部由服务端重建。提示词不能保证消除幻觉，生成的结论仍需人工核对原文。
+- 已在本机 Ollama `qwen3:8b` 的 OpenAI 兼容端点完成少量真实联调；Qwen3 默认 thinking 会占用输出 token，本地联调设置 `RAG_ANCHOR_LLM_REASONING_EFFORT=none`。自动化测试仍只使用 Fake/Mock Provider。
+
+示例（仅在模型服务已部署且你确认可调用后使用）：
+
+```bash
+cd backend
+export RAG_ANCHOR_LLM_ENABLED=true
+export RAG_ANCHOR_LLM_BASE_URL=http://127.0.0.1:11434/v1
+export RAG_ANCHOR_LLM_MODEL=<模型名称>
+# Qwen3 等 thinking 模型可关闭推理输出：export RAG_ANCHOR_LLM_REASONING_EFFORT=none
+# 如服务需要鉴权：export RAG_ANCHOR_LLM_API_KEY=...
+uv run uvicorn rag_anchor.main:app --port 8000
+```
+
 ## 质量校验
 
 后端：
@@ -193,6 +235,8 @@ uv run ruff check .
 uv run ruff format --check .
 uv lock --check
 ```
+
+后端测试使用注入的 Fake/Mock Provider，不发起真实模型请求，也不需要 GPU 或模型文件。覆盖默认 `evidence_only`、未配置 503、引用编号校验、未知编号拒绝、非法 JSON、超时/连接失败、无证据不调用模型、提示词注入隔离与跨文档拒绝。
 
 前端：
 
@@ -219,11 +263,14 @@ npm run build
 - 不支持加密 PDF、任意角度旋转文字的精确四边形、RTL、复杂表格阅读顺序。
 - 锚点搜索每次重新打开 PDF，无坐标缓存；Chunk 检索只读取已建立索引的数据。
 - SQLite 短连接，适合单机开发，不适合多 worker 高并发写入。
+- 生成式问答只校验“引用了哪些服务端证据”，不验证生成句子的每个事实；答案仍可能出错，必须人工核对。
+- 已用本机 Ollama `qwen3:8b` 做过少量真实联调，但未覆盖其他模型、较大规模请求或复杂文档；不能据此宣称泛化生成质量，生产环境仍需人工核对。
 
 ## 文档
 
 - [架构说明](docs/architecture.md)
 - [ADR-0001：坐标契约](docs/adr/0001-coordinate-contract.md)
+- [人工浏览器验收清单](docs/manual-ui-acceptance.md)
 - [前端说明](frontend/README.md)
 - [后端说明](backend/README.md)
 

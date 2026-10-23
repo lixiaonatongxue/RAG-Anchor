@@ -1,5 +1,6 @@
 import type {
   AnchorSearchResponse,
+  AnswerMode,
   ChunkRetrievalResponse,
   DocumentIndexResponse,
   DocumentListResponse,
@@ -181,10 +182,12 @@ export class RagAnchorApi {
       retrievalQuery?: string;
       matchCase?: boolean;
       maxCitations?: number;
+      answerMode?: AnswerMode;
     }
   ): Promise<QuestionAnswerResponse> {
     const body: Record<string, unknown> = {
       question: options.question,
+      answer_mode: options.answerMode ?? "evidence_only",
       match_case: options.matchCase ?? false,
       max_citations: options.maxCitations ?? 5,
     };
