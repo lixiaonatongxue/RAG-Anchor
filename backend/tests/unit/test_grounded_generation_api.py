@@ -200,8 +200,15 @@ def test_grounded_answer_uses_retrieved_evidence_and_server_citation_fields(
             "hit_text",
             "chunk_text",
             "extraction_version",
+            "support_text",
+            "support_start",
+            "support_end",
+            "support_kind",
         ):
             assert citation[key] == source[key]
+        assert citation["support_kind"] in {"sentence", "retrieval_match"}
+        assert citation["support_start"] <= citation["match_start"]
+        assert citation["support_end"] >= citation["match_end"]
         assert not {"rects", "bbox", "page"} & set(citation)
         assert citation["document_id"] == document_id
 
@@ -368,9 +375,9 @@ def test_repeated_text_keeps_exact_span_and_locates_real_geometry(
             "items": [
                 {
                     "page_index": citation["page_index"],
-                    "match_start": citation["match_start"],
-                    "match_end": citation["match_end"],
-                    "hit_text": citation["hit_text"],
+                    "match_start": citation["support_start"],
+                    "match_end": citation["support_end"],
+                    "hit_text": citation["support_text"],
                     "chunk_id": citation["chunk_id"],
                 }
             ]
@@ -378,8 +385,8 @@ def test_repeated_text_keeps_exact_span_and_locates_real_geometry(
     )
     assert locate.status_code == 200, locate.text
     result = locate.json()["results"][0]
-    assert result["match_start"] == expected[1]["match_start"]
-    assert result["matched_text"] == "quick"
+    assert result["match_start"] == citation["support_start"]
+    assert result["matched_text"] == citation["support_text"]
     assert result["rects"]
     assert result["bbox"] is not None
 

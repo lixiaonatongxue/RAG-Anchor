@@ -600,6 +600,31 @@ button:disabled {
   background: var(--accent);
 }
 
+.support-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.support-pill--sentence {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.support-pill--retrieval_match {
+  color: var(--warning);
+  background: var(--surface-sunken);
+}
+
+.result-item.is-active .support-pill {
+  color: var(--accent-strong);
+  background: #fff;
+}
+
 .qa-citation-context {
   display: -webkit-box;
   overflow: hidden;

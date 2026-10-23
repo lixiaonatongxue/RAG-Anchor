@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   citationBelongsToDocument,
   citationLabel,
+  citationSupportSpan,
   toCitationEvidenceSpan,
 } from "../src/qa/citation";
 import type { EvidenceCitation } from "../src/api/types";
@@ -23,8 +24,27 @@ const citation: EvidenceCitation = {
   extraction_version: "v1",
 };
 
+const sentenceCitation: EvidenceCitation = {
+  ...citation,
+  match_start: 4,
+  match_end: 9,
+  chunk_text: "The quick brown fox jumps over the lazy dog.",
+  support_text: "The quick brown fox jumps over the lazy dog.",
+  support_start: 0,
+  support_end: 44,
+  support_kind: "sentence",
+};
+
+const fallbackCitation: EvidenceCitation = {
+  ...citation,
+  support_text: "quick",
+  support_start: 42,
+  support_end: 47,
+  support_kind: "retrieval_match",
+};
+
 describe("toCitationEvidenceSpan", () => {
-  it("passes the retrieved occurrence through unchanged", () => {
+  it("falls back to the retrieval hit when support fields are absent", () => {
     expect(toCitationEvidenceSpan(citation)).toEqual({
       page_index: 3,
       match_start: 42,
@@ -34,12 +54,87 @@ describe("toCitationEvidenceSpan", () => {
     });
   });
 
+  it("locates the complete support sentence when the server provides one", () => {
+    expect(toCitationEvidenceSpan(sentenceCitation)).toEqual({
+      page_index: 3,
+      match_start: 0,
+      match_end: 44,
+      hit_text: "The quick brown fox jumps over the lazy dog.",
+      chunk_id: "chunk-0002",
+    });
+  });
+
+  it("keeps an explicit retrieval-only support span unchanged", () => {
+    expect(toCitationEvidenceSpan(fallbackCitation)).toEqual({
+      page_index: 3,
+      match_start: 42,
+      match_end: 47,
+      hit_text: "quick",
+      chunk_id: "chunk-0002",
+    });
+  });
+
   it("never derives PDF geometry or re-searches the hit text", () => {
-    const span = toCitationEvidenceSpan(citation);
-    expect(span).not.toHaveProperty("rects");
-    expect(span).not.toHaveProperty("bbox");
-    expect(span).not.toHaveProperty("page");
-    expect(span).not.toHaveProperty("char_start");
+    for (const item of [citation, sentenceCitation, fallbackCitation]) {
+      const span = toCitationEvidenceSpan(item);
+      expect(span).not.toHaveProperty("rects");
+      expect(span).not.toHaveProperty("bbox");
+      expect(span).not.toHaveProperty("page");
+      expect(span).not.toHaveProperty("char_start");
+    }
+  });
+});
+
+describe("citationSupportSpan", () => {
+  it("rejects a support span whose text length does not match its offsets", () => {
+    const inconsistent: EvidenceCitation = {
+      ...sentenceCitation,
+      support_end: 45,
+    };
+    expect(citationSupportSpan(inconsistent)).toEqual({
+      text: "quick",
+      start: 4,
+      end: 9,
+      kind: "retrieval_match",
+    });
+  });
+
+  it("rejects a support span that does not contain the retrieval hit", () => {
+    const inconsistent: EvidenceCitation = {
+      ...sentenceCitation,
+      support_start: 10,
+      support_end: 30,
+      support_text: "brown fox jumps over the l",
+    };
+    expect(citationSupportSpan(inconsistent).kind).toBe("retrieval_match");
+    expect(citationSupportSpan(inconsistent).start).toBe(4);
+  });
+
+  it("does not treat missing support data as a sentence", () => {
+    expect(citationSupportSpan(citation)).toEqual({
+      text: "quick",
+      start: 42,
+      end: 47,
+      kind: "retrieval_match",
+    });
+  });
+
+  it("counts code points so non-BMP text keeps Python-offset parity", () => {
+    const nonBmp: EvidenceCitation = {
+      ...citation,
+      match_start: 2,
+      match_end: 7,
+      support_text: "😀 quick.",
+      support_start: 0,
+      support_end: 8,
+      support_kind: "sentence",
+    };
+    expect(citationSupportSpan(nonBmp)).toEqual({
+      text: "😀 quick.",
+      start: 0,
+      end: 8,
+      kind: "sentence",
+    });
   });
 });
 
@@ -58,8 +153,18 @@ describe("citationBelongsToDocument", () => {
 });
 
 describe("citationLabel", () => {
-  it("shows the citation id, page and exact Python span", () => {
-    expect(citationLabel(citation)).toBe("E2 · 第 4 页 · 字符 42–47");
+  it("labels an older citation as retrieval-only", () => {
+    expect(citationLabel(citation)).toBe("E2 · 第 4 页 · 仅检索命中 42–47");
+  });
+
+  it("labels a sentence support span and its exact offsets", () => {
+    expect(citationLabel(sentenceCitation)).toBe("E2 · 第 4 页 · 支持句 0–44");
+  });
+
+  it("labels an explicit fallback as retrieval-only", () => {
+    expect(citationLabel(fallbackCitation)).toBe(
+      "E2 · 第 4 页 · 仅检索命中 42–47"
+    );
   });
 });
 

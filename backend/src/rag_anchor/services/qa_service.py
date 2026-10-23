@@ -35,6 +35,7 @@ from rag_anchor.services.retrieval_service import (
     ChunkRetrievalService,
     RetrievalMatch,
 )
+from rag_anchor.services.support_span import build_support_span
 
 ANSWER_MODE_EVIDENCE_ONLY = "evidence_only"
 ANSWER_MODE_GROUNDED_GENERATION = "grounded_generation"
@@ -107,7 +108,15 @@ class GeneratedAnswerError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class EvidenceCitation:
-    """One retrieved source span, ready for evidence/locate on click."""
+    """One retrieved source span, ready for evidence/locate on click.
+
+    ``match_*``/``hit_text`` identify the literal retrieval hit unchanged.
+    ``support_*`` identify the wider span that should be located and highlighted
+    on click: the complete sentence containing the hit when that sentence is
+    reliably determined, otherwise the hit itself. ``support_kind`` states which
+    case applies; a ``retrieval_match`` support is a locatable keyword hit, not
+    a sentence-level claim of factual support.
+    """
 
     citation_id: str
     document_id: UUID
@@ -120,6 +129,10 @@ class EvidenceCitation:
     hit_text: str
     chunk_text: str
     extraction_version: str
+    support_text: str
+    support_start: int
+    support_end: int
+    support_kind: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,6 +299,16 @@ class QuestionAnswerService:
         document_id: UUID,
         matches: list[RetrievalMatch],
     ) -> list[EvidenceCitation]:
+        if not matches:
+            return []
+
+        page_texts = {
+            page.page_index: page.text
+            for page in self._repository.get_document_page_texts(document_id)
+        }
+        if not page_texts:
+            raise QuestionIndexUnavailableError("Document has not been indexed")
+
         citations: list[EvidenceCitation] = []
         for index, match in enumerate(matches, start=1):
             if match.document_id != document_id:
@@ -294,6 +317,28 @@ class QuestionAnswerService:
                 raise QuestionCitationScopeError(
                     "Retrieval returned a citation from another document"
                 )
+
+            page_text = page_texts.get(match.page_index)
+            if page_text is None:
+                raise QuestionCitationScopeError(
+                    "Retrieved chunk references a page outside the stored index"
+                )
+            if page_text[match.start_offset : match.end_offset] != match.chunk_text:
+                raise QuestionCitationScopeError(
+                    "Retrieved chunk does not match the stored page text"
+                )
+            if page_text[match.match_start : match.match_end] != match.hit_text:
+                raise QuestionCitationScopeError(
+                    "Retrieved hit does not match the stored page text"
+                )
+
+            support = build_support_span(
+                page_text,
+                chunk_start=match.start_offset,
+                chunk_end=match.end_offset,
+                match_start=match.match_start,
+                match_end=match.match_end,
+            )
             citations.append(
                 EvidenceCitation(
                     citation_id=f"E{index}",
@@ -307,6 +352,10 @@ class QuestionAnswerService:
                     hit_text=match.hit_text,
                     chunk_text=match.chunk_text,
                     extraction_version=match.extraction_version,
+                    support_text=support.text,
+                    support_start=support.start,
+                    support_end=support.end,
+                    support_kind=support.kind,
                 )
             )
         return citations

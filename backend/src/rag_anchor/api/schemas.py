@@ -286,6 +286,14 @@ class EvidenceCitationResponse(BaseModel):
     ``match_start``/``match_end`` are Python string offsets into the stored
     page text, exactly as returned by chunk retrieval. No PDF coordinates are
     produced by question answering.
+
+    ``support_start``/``support_end`` delimit the span that should be located
+    on click. They either cover the complete sentence containing the retrieval
+    hit (``support_kind == "sentence"``) or exactly the retrieval hit
+    (``support_kind == "retrieval_match"``) when no reliable sentence could be
+    determined. Both kinds are exact slices of the stored page text and stay
+    inside the citation's chunk; ``support_kind`` never claims factual support
+    for a generated answer.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -301,6 +309,20 @@ class EvidenceCitationResponse(BaseModel):
     hit_text: str
     chunk_text: str
     extraction_version: str
+    support_text: str = Field(min_length=1)
+    support_start: int = Field(ge=0)
+    support_end: int = Field(ge=1)
+    support_kind: Literal["sentence", "retrieval_match"]
+
+    @model_validator(mode="after")
+    def _support_span_must_contain_the_hit(self) -> EvidenceCitationResponse:
+        if self.support_end <= self.support_start:
+            raise ValueError("support_end must be greater than support_start")
+        if len(self.support_text) != self.support_end - self.support_start:
+            raise ValueError("support_text length must equal support_end - support_start")
+        if self.support_start > self.match_start or self.support_end < self.match_end:
+            raise ValueError("support span must contain the retrieval hit")
+        return self
 
 
 class QuestionResponse(BaseModel):

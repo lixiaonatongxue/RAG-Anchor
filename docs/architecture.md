@@ -275,8 +275,10 @@ POST /api/v1/documents/{document_id}/qa
 - 问答直接复用 M1-02 的字面 Chunk 检索。`retrieval_query` 是可选的检索原文；省略时使用 `question` 原文进行字面匹配。自然语言问题不会被语义理解。
 - 检索严格限定 `document_id`；引用只能来自该文档已持久化的 Chunk。服务端在返回前校验每个命中属于该文档，否则按内部错误处理，绝不跨文档泄露。
 - 服务端按返回顺序给证据分配 `E1`、`E2`…；所有引用字段（`document_id`、`chunk_id`、`page_index`、`page_number`、`match_start`、`match_end`、`hit_text`、`chunk_text`、`extraction_version`）来自存储索引，不来自模型输出。
+- 每个引用额外包含 `support_text`、`support_start`、`support_end`、`support_kind`。它们描述点击引用时应定位的精确页面文本区间：优先为命中所在的完整句子（`support_kind = "sentence"`）；跨行、句子边界不明确、命中跨越句子或 Chunk 边界截断时，回退为原关键词命中（`support_kind = "retrieval_match"`）。两种区间都满足 `page_text[support_start:support_end] == support_text`，且完全位于该引用的 Chunk 内。
+- 句子切分是确定性标点启发式，仅用于选择可定位的原文区间，**不是**模型结论与句子之间事实支持关系的自动证明。
 - 没有命中时返回 HTTP 200，`status = "insufficient_evidence"`、`citations = []`；两种模式都不会调用模型。
-- 点击引用时前端调用 M1-03B `POST /evidence/locate`，使用 `page_index + match_start + match_end + hit_text + chunk_id` 精确定位，并复用现有 PDF.js 高亮。问答接口本身不返回 PDF 几何。
+- 点击引用时前端调用 M1-03B `POST /evidence/locate`，使用 `page_index + support_start + support_end + support_text + chunk_id` 精确定位，并复用现有 PDF.js 高亮。原始 `match_*`/`hit_text` 保持不变，用于追溯检索命中。问答接口本身不返回 PDF 几何。
 
 **`evidence_only`（默认）**
 

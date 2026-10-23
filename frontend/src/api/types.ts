@@ -129,11 +129,25 @@ export interface EvidenceLocateResponse {
 }
 
 /**
+ * How a citation's support span was derived.
+ *
+ * `sentence` means the complete sentence containing the retrieval hit was
+ * selected by a deterministic punctuation heuristic. It is not proof that the
+ * sentence supports every generated conclusion. `retrieval_match` means no
+ * reliable sentence could be selected, so the support span is exactly the
+ * literal retrieval hit.
+ */
+export type CitationSupportKind = "sentence" | "retrieval_match";
+
+/**
  * One retrieved page-text span offered as a question citation.
  *
  * These are Python string offsets into the stored page text, never PDF
  * coordinates. A citation is only displayable after evidence/locate maps it
  * to real PDFium geometry.
+ *
+ * `support_*` fields are additive. When absent (an older server), callers fall
+ * back to the retrieval hit span.
  */
 export interface EvidenceCitation {
   citation_id: string;
@@ -147,6 +161,10 @@ export interface EvidenceCitation {
   hit_text: string;
   chunk_text: string;
   extraction_version: string;
+  support_text?: string;
+  support_start?: number;
+  support_end?: number;
+  support_kind?: CitationSupportKind;
 }
 
 /**

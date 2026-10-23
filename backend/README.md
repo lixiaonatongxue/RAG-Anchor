@@ -180,6 +180,7 @@ Content-Type: application/json
 - 生成模式把服务端证据（`E1`、`E2`…）交给模型；模型只能返回 `answer` 与 `citation_ids`。未知编号、非法 JSON、超长或空回答会被拒绝；引用字段全部按服务端记录重建。
 - 模型返回空 `citation_ids` 时丢弃其文本，返回 `insufficient_evidence`。
 - 引用不包含 PDF 几何；点击引用需调用 `POST /evidence/locate`。
+- 每个引用包含 `support_text` / `support_start` / `support_end` / `support_kind`：优先定位命中所在的完整句子（`sentence`）；跨行、句子边界不清或 Chunk 边界截断时回退为关键词命中（`retrieval_match`）。两种区间都是存储页面文本的精确切片，并位于同一 Chunk 内；句子切分只是标点启发式，不代表事实已被证明。
 - 错误语义：404 文档不存在；409 未索引；422 请求非法；503 生成模式未启用/未配置；504 模型超时；502 模型服务失败或响应无法校验。
 
 响应示例（生成模式成功）：
@@ -206,7 +207,11 @@ Content-Type: application/json
       "match_end": 135,
       "hit_text": "proposed method",
       "chunk_text": "...",
-      "extraction_version": "v1"
+      "extraction_version": "v1",
+      "support_text": "The proposed method has three stages: ingestion, retrieval, and verification.",
+      "support_start": 116,
+      "support_end": 193,
+      "support_kind": "sentence"
     }
   ]
 }

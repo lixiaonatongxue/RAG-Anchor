@@ -20,6 +20,7 @@ import type { ViewerState } from "./pdf/viewer";
 import {
   citationBelongsToDocument,
   citationLabel,
+  citationSupportSpan,
   toCitationEvidenceSpan,
 } from "./qa/citation";
 import { answerModeLabel, generationFailureMessage } from "./qa/mode";
@@ -979,6 +980,9 @@ function renderQaCitations(): void {
   qaCitations.replaceChildren();
 
   qaCitationItems.forEach((citation, index) => {
+    const support = citationSupportSpan(citation);
+    const supportLabel =
+      support.kind === "sentence" ? "支持句" : "仅检索命中";
     const button = document.createElement("button");
     button.type = "button";
     button.className = `result-item qa-citation${
@@ -990,7 +994,7 @@ function renderQaCitations(): void {
     );
     button.setAttribute(
       "aria-label",
-      `${citationLabel(citation)}：${snippet(citation.hit_text, 80)}`
+      `${citationLabel(citation)}：${snippet(support.text, 80)}`
     );
 
     const topLine = document.createElement("span");
@@ -1004,15 +1008,19 @@ function renderQaCitations(): void {
     pagePill.className = "page-pill";
     pagePill.textContent = `第 ${citation.page_number} 页`;
 
+    const supportPill = document.createElement("span");
+    supportPill.className = `support-pill support-pill--${support.kind}`;
+    supportPill.textContent = supportLabel;
+
     const charRange = document.createElement("span");
     charRange.className = "result-char";
-    charRange.textContent = `字符 ${citation.match_start}–${citation.match_end}`;
+    charRange.textContent = `字符 ${support.start}–${support.end}`;
 
-    topLine.append(citationPill, pagePill, charRange);
+    topLine.append(citationPill, pagePill, supportPill, charRange);
 
     const text = document.createElement("p");
     text.className = "result-text";
-    text.textContent = snippet(citation.hit_text, 180);
+    text.textContent = snippet(support.text, 180);
 
     const context = document.createElement("p");
     context.className = "qa-citation-context";

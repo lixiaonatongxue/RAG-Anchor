@@ -12,6 +12,8 @@ from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
 from rag_anchor.services.qa_service import (
     QuestionAnswerService,
@@ -48,6 +50,10 @@ CITATION_FIELDS = {
     "hit_text",
     "chunk_text",
     "extraction_version",
+    "support_text",
+    "support_start",
+    "support_end",
+    "support_kind",
 }
 
 
@@ -91,13 +97,24 @@ def _retrieval_hits(
 
 
 def _citation_item(citation: dict) -> dict[str, object]:
-    """Build the evidence/locate item exactly as the frontend does."""
+    """Build the evidence/locate item exactly as the frontend does.
+
+    The support span is what a citation click locates; the original retrieval
+    hit fields are never used for geometry.
+    """
     return {
         "page_index": citation["page_index"],
-        "match_start": citation["match_start"],
-        "match_end": citation["match_end"],
-        "hit_text": citation["hit_text"],
+        "match_start": citation["support_start"],
+        "match_end": citation["support_end"],
+        "hit_text": citation["support_text"],
         "chunk_id": citation["chunk_id"],
+    }
+
+
+def _page_texts(api, document_id: str) -> dict[int, str]:
+    repository = api.app.state.document_service.repository
+    return {
+        page.page_index: page.text for page in repository.get_document_page_texts(UUID(document_id))
     }
 
 
@@ -161,6 +178,7 @@ def test_evidence_only_answer_returns_traceable_citations(api, single_page_pdf: 
     ]
     assert actual == expected
 
+    page_texts = _page_texts(api, document_id)
     for index, citation in enumerate(body["citations"], start=1):
         assert set(citation) == CITATION_FIELDS
         assert citation["citation_id"] == f"E{index}"
@@ -170,6 +188,25 @@ def test_evidence_only_answer_returns_traceable_citations(api, single_page_pdf: 
         assert citation["match_start"] < citation["match_end"]
         assert len(citation["hit_text"]) == citation["match_end"] - citation["match_start"]
         assert citation["extraction_version"]
+        assert citation["support_kind"] in {"sentence", "retrieval_match"}
+        assert citation["support_start"] <= citation["match_start"]
+        assert citation["match_end"] <= citation["support_end"]
+        page_text = page_texts[citation["page_index"]]
+        assert (
+            page_text[citation["support_start"] : citation["support_end"]]
+            == citation["support_text"]
+        )
+        assert (
+            citation["support_text"][
+                citation["match_start"] - citation["support_start"] : citation["match_end"]
+                - citation["support_start"]
+            ]
+            == citation["hit_text"]
+        )
+        if citation["support_kind"] == "retrieval_match":
+            assert citation["support_start"] == citation["match_start"]
+            assert citation["support_end"] == citation["match_end"]
+            assert citation["support_text"] == citation["hit_text"]
 
 
 def test_retrieval_query_defaults_to_the_question(api, single_page_pdf: Path) -> None:
@@ -306,10 +343,13 @@ def test_citations_locate_to_distinct_real_occurrences(api, single_page_pdf: Pat
     assert locate.status_code == 200, locate.text
     results = locate.json()["results"]
     assert [item["match_start"] for item in results] == [
-        citation["match_start"] for citation in body["citations"]
+        citation["support_start"] for citation in body["citations"]
     ]
     assert [item["hit_text"] for item in results] == [
-        citation["hit_text"] for citation in body["citations"]
+        citation["support_text"] for citation in body["citations"]
+    ]
+    assert [item["matched_text"] for item in results] == [
+        citation["support_text"] for citation in body["citations"]
     ]
     assert all(item["rects"] for item in results)
     rect_sets = {tuple(sorted(rect.items())) for item in results for rect in item["rects"]}
@@ -330,6 +370,174 @@ def test_qa_does_not_change_index_rows(api, single_page_pdf: Path) -> None:
     assert repository.get_document_chunks(document_uuid) == chunks_before
     assert repository.get_document_page_texts(document_uuid) == pages_before
     assert repository.get_document_index_metadata(document_uuid) == metadata_before
+
+
+def test_keyword_hit_expands_to_the_complete_sentence(api, single_page_pdf: Path) -> None:
+    document_id = _indexed_document(api, single_page_pdf)
+
+    body = _ask(
+        api.client,
+        document_id,
+        {"question": "stages", "retrieval_query": "quick", "max_citations": 1},
+    ).json()
+
+    citation = body["citations"][0]
+    assert citation["hit_text"] == "quick"
+    assert citation["support_kind"] == "sentence"
+    assert citation["support_text"] == "The quick brown fox jumps over the lazy dog."
+    assert citation["support_start"] < citation["match_start"]
+    assert citation["match_end"] < citation["support_end"]
+    assert citation["support_start"] >= 0
+
+    locate = api.client.post(
+        EVIDENCE_URL.format(document_id=document_id),
+        json={"items": [_citation_item(citation)]},
+    )
+    assert locate.status_code == 200, locate.text
+    result = locate.json()["results"][0]
+    assert result["matched_text"] == citation["support_text"]
+    assert result["match_start"] == citation["support_start"]
+    assert result["match_end"] == citation["support_end"]
+    # One line of text yields exactly the real PDFium rectangle for that line;
+    # the support span never adds synthetic rectangles.
+    assert len(result["rects"]) == 1
+    assert result["bbox"] is not None
+
+
+def test_cross_line_sentence_falls_back_to_the_retrieval_hit(
+    api,
+    pdf_factory,
+) -> None:
+    path = pdf_factory(
+        "crossline.pdf",
+        [
+            [
+                (100.0, 300.0, "The project has three"),
+                (100.0, 280.0, "stages: ingestion, retrieval, and evidence verification."),
+            ]
+        ],
+    )
+    document_id = _indexed_document(api, path)
+
+    body = _ask(
+        api.client,
+        document_id,
+        {"question": "stages", "retrieval_query": "stages"},
+    ).json()
+
+    citation = body["citations"][0]
+    assert citation["hit_text"] == "stages"
+    assert citation["support_kind"] == "retrieval_match"
+    assert citation["support_text"] == citation["hit_text"]
+    assert citation["support_start"] == citation["match_start"]
+    assert citation["support_end"] == citation["match_end"]
+    page_text = _page_texts(api, document_id)[citation["page_index"]]
+    assert "\r\n" in page_text
+    assert page_text[citation["support_start"] : citation["support_end"]] == "stages"
+
+    locate = api.client.post(
+        EVIDENCE_URL.format(document_id=document_id),
+        json={"items": [_citation_item(citation)]},
+    )
+    assert locate.status_code == 200, locate.text
+    assert locate.json()["results"][0]["matched_text"] == "stages"
+
+
+def test_repeated_identical_sentence_gets_distinct_exact_support_spans(
+    api,
+    pdf_factory,
+) -> None:
+    sentence = "The project has three stages."
+    path = pdf_factory(
+        "repeat-sentence.pdf",
+        [[(100.0, 300.0, sentence), (100.0, 280.0, sentence)]],
+    )
+    document_id = _indexed_document(api, path)
+
+    body = _ask(
+        api.client,
+        document_id,
+        {"question": "stages", "retrieval_query": "stages"},
+    ).json()
+
+    citations = body["citations"]
+    assert len(citations) == 2
+    assert [citation["support_kind"] for citation in citations] == ["sentence", "sentence"]
+    assert [citation["support_text"] for citation in citations] == [sentence, sentence]
+    assert citations[0]["support_start"] != citations[1]["support_start"]
+
+    page_text = _page_texts(api, document_id)[0]
+    for citation in citations:
+        assert page_text[citation["support_start"] : citation["support_end"]] == sentence
+
+    locate = api.client.post(
+        EVIDENCE_URL.format(document_id=document_id),
+        json={"items": [_citation_item(citation) for citation in citations]},
+    )
+    assert locate.status_code == 200, locate.text
+    results = locate.json()["results"]
+    assert [result["matched_text"] for result in results] == [sentence, sentence]
+    assert results[0]["bbox"] != results[1]["bbox"]
+
+
+def test_sentence_cut_by_chunk_boundary_falls_back(
+    api,
+    pdf_factory,
+) -> None:
+    # 810 characters: the hit sits in the first 800-character chunk while its
+    # terminal period is only in the next chunk. The chunk is never extended.
+    text = ("A" * 780) + " stages " + ("B" * 20) + "."
+    path = pdf_factory("chunk-boundary.pdf", [[(100.0, 300.0, text)]])
+    document_id = _indexed_document(api, path)
+
+    body = _ask(
+        api.client,
+        document_id,
+        {"question": "stages", "retrieval_query": "stages"},
+    ).json()
+
+    citation = body["citations"][0]
+    assert citation["chunk_index"] == 0
+    assert citation["support_kind"] == "retrieval_match"
+    assert citation["support_text"] == "stages"
+    assert citation["support_start"] == citation["match_start"]
+    assert citation["support_end"] == citation["match_end"]
+
+
+def test_cjk_punctuation_selects_the_complete_sentence(api, pdf_factory) -> None:
+    font_name = "STSong-Light"
+    if font_name not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+    sentence = "项目包含三个阶段：采集、检索和证据校验。预算尚未确定。"  # noqa: RUF001
+    path = pdf_factory(
+        "cjk-support.pdf",
+        [[(100.0, 300.0, sentence)]],
+        font_name=font_name,
+    )
+    document_id = _indexed_document(api, path)
+
+    body = _ask(
+        api.client,
+        document_id,
+        {"question": "证据校验", "retrieval_query": "证据校验"},
+    ).json()
+
+    citation = body["citations"][0]
+    assert citation["support_kind"] == "sentence"
+    assert citation["support_text"] == (
+        "项目包含三个阶段：采集、检索和证据校验。"  # noqa: RUF001
+    )
+    page_text = _page_texts(api, document_id)[citation["page_index"]]
+    assert (
+        page_text[citation["support_start"] : citation["support_end"]] == citation["support_text"]
+    )
+
+    locate = api.client.post(
+        EVIDENCE_URL.format(document_id=document_id),
+        json={"items": [_citation_item(citation)]},
+    )
+    assert locate.status_code == 200, locate.text
+    assert locate.json()["results"][0]["matched_text"] == citation["support_text"]
 
 
 class _ForeignDocumentRetrieval:
