@@ -43,6 +43,19 @@ const fallbackCitation: EvidenceCitation = {
   support_kind: "retrieval_match",
 };
 
+const semanticCitation: EvidenceCitation = {
+  ...citation,
+  match_start: 0,
+  match_end: 29,
+  hit_text: "The project has three stages.",
+  retrieval_kind: "semantic",
+  score: 0.8123,
+  support_text: "The project has three stages.",
+  support_start: 0,
+  support_end: 29,
+  support_kind: "semantic_candidate",
+};
+
 describe("toCitationEvidenceSpan", () => {
   it("falls back to the retrieval hit when support fields are absent", () => {
     expect(toCitationEvidenceSpan(citation)).toEqual({
@@ -74,8 +87,23 @@ describe("toCitationEvidenceSpan", () => {
     });
   });
 
+  it("locates the exact semantic candidate span", () => {
+    expect(toCitationEvidenceSpan(semanticCitation)).toEqual({
+      page_index: 3,
+      match_start: 0,
+      match_end: 29,
+      hit_text: "The project has three stages.",
+      chunk_id: "chunk-0002",
+    });
+  });
+
   it("never derives PDF geometry or re-searches the hit text", () => {
-    for (const item of [citation, sentenceCitation, fallbackCitation]) {
+    for (const item of [
+      citation,
+      sentenceCitation,
+      fallbackCitation,
+      semanticCitation,
+    ]) {
       const span = toCitationEvidenceSpan(item);
       expect(span).not.toHaveProperty("rects");
       expect(span).not.toHaveProperty("bbox");
@@ -116,6 +144,29 @@ describe("citationSupportSpan", () => {
       start: 42,
       end: 47,
       kind: "retrieval_match",
+    });
+  });
+
+  it("marks a semantic candidate as such and never as a keyword hit", () => {
+    expect(citationSupportSpan(semanticCitation)).toEqual({
+      text: "The project has three stages.",
+      start: 0,
+      end: 29,
+      kind: "semantic_candidate",
+    });
+  });
+
+  it("falls back to the semantic hit when its support span is inconsistent", () => {
+    const inconsistent: EvidenceCitation = {
+      ...semanticCitation,
+      support_end: 28,
+      support_text: "The project has three stages",
+    };
+    expect(citationSupportSpan(inconsistent)).toEqual({
+      text: "The project has three stages.",
+      start: 0,
+      end: 29,
+      kind: "semantic_candidate",
     });
   });
 
@@ -164,6 +215,12 @@ describe("citationLabel", () => {
   it("labels an explicit fallback as retrieval-only", () => {
     expect(citationLabel(fallbackCitation)).toBe(
       "E2 · 第 4 页 · 仅检索命中 42–47"
+    );
+  });
+
+  it("labels a semantic candidate with its cosine score", () => {
+    expect(citationLabel(semanticCitation)).toBe(
+      "E2 · 第 4 页 · 语义候选 · 相似度 0.812 · 0–29"
     );
   });
 });

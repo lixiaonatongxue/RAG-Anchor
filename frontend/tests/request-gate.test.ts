@@ -77,4 +77,39 @@ describe("createRequestGate", () => {
     expect(callbacks[1]).not.toHaveBeenCalled();
     expect(callbacks[2]).toHaveBeenCalledTimes(1);
   });
+
+  it("invalidates an in-flight answer when a semantic rebuild starts", async () => {
+    // Mirrors performSemanticIndex(): starting a rebuild calls
+    // qaGate.begin() via resetQaState() before the request is sent.
+    const qaGate = createRequestGate();
+    const answerToken = qaGate.begin();
+    const applied: string[] = [];
+    const oldAnswer = Promise.resolve().then(() => {
+      if (qaGate.isCurrent(answerToken)) {
+        applied.push("old answer");
+      }
+    });
+
+    const rebuildToken = qaGate.begin();
+    await oldAnswer;
+
+    expect(applied).toEqual([]);
+    expect(qaGate.isCurrent(answerToken)).toBe(false);
+    expect(qaGate.isCurrent(rebuildToken)).toBe(true);
+  });
+
+  it("keeps the QA gate usable when a semantic rebuild fails", () => {
+    const qaGate = createRequestGate();
+    const oldAnswerToken = qaGate.begin();
+    const rebuildToken = qaGate.begin();
+
+    // A failed rebuild does not begin a new token; the old answer stays stale
+    // and the next question can proceed normally.
+    expect(qaGate.isCurrent(oldAnswerToken)).toBe(false);
+    expect(qaGate.isCurrent(rebuildToken)).toBe(true);
+
+    const nextAnswerToken = qaGate.begin();
+    expect(qaGate.isCurrent(rebuildToken)).toBe(false);
+    expect(qaGate.isCurrent(nextAnswerToken)).toBe(true);
+  });
 });

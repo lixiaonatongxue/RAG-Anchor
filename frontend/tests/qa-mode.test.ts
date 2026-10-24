@@ -5,6 +5,9 @@ import {
   GENERATED_ANSWER_LABEL,
   answerModeLabel,
   generationFailureMessage,
+  retrievalModeLabel,
+  semanticFailureMessage,
+  semanticIndexFailureMessage,
 } from "../src/qa/mode";
 
 describe("answer mode labels", () => {
@@ -46,5 +49,40 @@ describe("generationFailureMessage", () => {
     expect(generationFailureMessage(500)).toBeNull();
     expect(generationFailureMessage(0)).toBeNull();
     expect(generationFailureMessage(404)).toBeNull();
+  });
+});
+
+describe("retrieval mode labels and semantic failures", () => {
+  it("labels both retrieval layers distinctly", () => {
+    expect(retrievalModeLabel("literal")).toBe("关键词检索");
+    expect(retrievalModeLabel("semantic")).toBe("语义检索");
+  });
+
+  it("does not replace a semantic failure with literal retrieval", () => {
+    const missingIndex = semanticFailureMessage(409, "semantic");
+    expect(missingIndex).toContain("语义索引");
+    expect(missingIndex).toContain("重建");
+    expect(missingIndex).not.toContain("字面匹配到");
+
+    const disabled = semanticFailureMessage(503, "semantic");
+    expect(disabled).toContain("未启用");
+    expect(disabled).toContain("未退回关键词检索");
+
+    const timeout = semanticFailureMessage(504, "semantic");
+    expect(timeout).toContain("超时");
+    expect(timeout).toContain("未展示");
+  });
+
+  it("never maps a literal failure to a semantic message", () => {
+    expect(semanticFailureMessage(409, "literal")).toBeNull();
+    expect(semanticFailureMessage(503, "literal")).toBeNull();
+  });
+
+  it("explains semantic index build failures without claiming success", () => {
+    expect(semanticIndexFailureMessage(409)).toContain("文本索引");
+    expect(semanticIndexFailureMessage(503)).toContain("无法建立");
+    expect(semanticIndexFailureMessage(502)).toContain("无效向量");
+    expect(semanticIndexFailureMessage(504)).toContain("超时");
+    expect(semanticIndexFailureMessage(200)).toBeNull();
   });
 });

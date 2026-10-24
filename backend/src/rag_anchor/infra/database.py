@@ -70,7 +70,51 @@ CREATE TABLE IF NOT EXISTS document_index_metadata (
     indexed_at TEXT NOT NULL,
     FOREIGN KEY (document_id) REFERENCES documents (document_id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS semantic_index_metadata (
+    document_id TEXT PRIMARY KEY,
+    model_name TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    model_digest TEXT NOT NULL DEFAULT '',
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    normalization TEXT NOT NULL,
+    index_version INTEGER NOT NULL DEFAULT 0,
+    candidate_version INTEGER NOT NULL DEFAULT 0,
+    source_fingerprint TEXT NOT NULL,
+    source_extraction_version TEXT NOT NULL,
+    candidate_count INTEGER NOT NULL CHECK (candidate_count >= 0),
+    built_at TEXT NOT NULL,
+    FOREIGN KEY (document_id) REFERENCES documents (document_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS semantic_candidates (
+    candidate_id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    chunk_id TEXT NOT NULL,
+    page_index INTEGER NOT NULL CHECK (page_index >= 0),
+    page_number INTEGER NOT NULL CHECK (page_number = page_index + 1),
+    chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+    start_offset INTEGER NOT NULL CHECK (start_offset >= 0),
+    end_offset INTEGER NOT NULL CHECK (end_offset > start_offset),
+    source_text TEXT NOT NULL,
+    extraction_version TEXT NOT NULL,
+    vector BLOB NOT NULL,
+    FOREIGN KEY (document_id) REFERENCES documents (document_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_semantic_candidates_document_page
+    ON semantic_candidates (document_id, page_index, start_offset);
 """
+
+# ``CREATE TABLE IF NOT EXISTS`` cannot add columns to a database created by an
+# older version. These additive migrations keep the source text and the derived
+# rows intact; old metadata rows keep the conservative defaults (version 0 and
+# an empty digest), so they are reported as stale until rebuilt.
+_SEMANTIC_METADATA_MIGRATIONS = (
+    ("model_digest", "model_digest TEXT NOT NULL DEFAULT ''"),
+    ("index_version", "index_version INTEGER NOT NULL DEFAULT 0"),
+    ("candidate_version", "candidate_version INTEGER NOT NULL DEFAULT 0"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +145,47 @@ class DocumentIndexRecord:
     indexed_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class SemanticIndexRecord:
+    """Metadata of one derived semantic index.
+
+    ``source_fingerprint`` ties the vectors to the text index they were built
+    from. ``model_name``, ``model_version``, ``dimension`` and ``normalization``
+    describe how the vectors were produced and must match the active provider
+    before the index may be queried.
+    """
+
+    document_id: UUID
+    model_name: str
+    model_version: str
+    dimension: int
+    normalization: str
+    source_fingerprint: str
+    source_extraction_version: str
+    candidate_count: int
+    built_at: datetime
+    model_digest: str = ""
+    index_version: int = 0
+    candidate_version: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticCandidateRecord:
+    """One persisted semantic candidate and its encoded vector."""
+
+    candidate_id: str
+    document_id: UUID
+    chunk_id: str
+    page_index: int
+    page_number: int
+    chunk_index: int
+    start_offset: int
+    end_offset: int
+    source_text: str
+    extraction_version: str
+    vector: bytes
+
+
 class DocumentRepository:
     """SQLite-backed metadata repository."""
 
@@ -126,6 +211,17 @@ class DocumentRepository:
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
+            self._migrate_semantic_metadata(connection)
+
+    @staticmethod
+    def _migrate_semantic_metadata(connection: sqlite3.Connection) -> None:
+        """Add version/identity columns to databases created by older builds."""
+        columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(semantic_index_metadata)")
+        }
+        for name, definition in _SEMANTIC_METADATA_MIGRATIONS:
+            if name not in columns:
+                connection.execute(f"ALTER TABLE semantic_index_metadata ADD COLUMN {definition}")
 
     def create(self, record: DocumentRecord) -> None:
         """Insert one metadata row."""
@@ -233,6 +329,14 @@ class DocumentRepository:
             if exists is None:
                 raise KeyError(document_key)
 
+            connection.execute(
+                "DELETE FROM semantic_candidates WHERE document_id = ?",
+                (document_key,),
+            )
+            connection.execute(
+                "DELETE FROM semantic_index_metadata WHERE document_id = ?",
+                (document_key,),
+            )
             connection.execute(
                 "DELETE FROM document_chunks WHERE document_id = ?",
                 (document_key,),
@@ -420,7 +524,161 @@ class DocumentRepository:
                 "DELETE FROM document_index_metadata WHERE document_id = ?",
                 (document_key,),
             ).rowcount
-        return bool(deleted_chunks or deleted_pages or deleted_metadata)
+            deleted_semantic_candidates = connection.execute(
+                "DELETE FROM semantic_candidates WHERE document_id = ?",
+                (document_key,),
+            ).rowcount
+            deleted_semantic_metadata = connection.execute(
+                "DELETE FROM semantic_index_metadata WHERE document_id = ?",
+                (document_key,),
+            ).rowcount
+        return bool(
+            deleted_chunks
+            or deleted_pages
+            or deleted_metadata
+            or deleted_semantic_candidates
+            or deleted_semantic_metadata
+        )
+
+    def replace_semantic_index(
+        self,
+        document_id: UUID,
+        *,
+        metadata: SemanticIndexRecord,
+        candidates: Sequence[SemanticCandidateRecord],
+    ) -> None:
+        """Atomically replace every derived semantic row of one document.
+
+        The text index is never touched. Vectors are persisted only after the
+        caller has embedded and validated every candidate; one transaction
+        removes the previous semantic index and inserts the new one. A failure
+        leaves the previous derived index (or its absence) unchanged.
+
+        Raises
+        ------
+        ValueError
+            If ``metadata`` or any candidate belongs to another document.
+        KeyError
+            If the document metadata row does not exist.
+        """
+        document_key = str(document_id)
+        if metadata.document_id != document_id:
+            raise ValueError("semantic metadata document_id does not match the target")
+        for candidate in candidates:
+            if candidate.document_id != document_id:
+                raise ValueError("semantic candidate does not belong to the target document")
+
+        with self._connect() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM documents WHERE document_id = ?",
+                (document_key,),
+            ).fetchone()
+            if exists is None:
+                raise KeyError(document_key)
+
+            connection.execute(
+                "DELETE FROM semantic_candidates WHERE document_id = ?",
+                (document_key,),
+            )
+            connection.execute(
+                "DELETE FROM semantic_index_metadata WHERE document_id = ?",
+                (document_key,),
+            )
+            connection.executemany(
+                """
+                INSERT INTO semantic_candidates
+                    (candidate_id, document_id, chunk_id, page_index, page_number,
+                     chunk_index, start_offset, end_offset, source_text,
+                     extraction_version, vector)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        candidate.candidate_id,
+                        document_key,
+                        candidate.chunk_id,
+                        candidate.page_index,
+                        candidate.page_number,
+                        candidate.chunk_index,
+                        candidate.start_offset,
+                        candidate.end_offset,
+                        candidate.source_text,
+                        candidate.extraction_version,
+                        candidate.vector,
+                    )
+                    for candidate in candidates
+                ],
+            )
+            connection.execute(
+                """
+                INSERT INTO semantic_index_metadata
+                    (document_id, model_name, model_version, model_digest, dimension,
+                     normalization, index_version, candidate_version,
+                     source_fingerprint, source_extraction_version,
+                     candidate_count, built_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    document_key,
+                    metadata.model_name,
+                    metadata.model_version,
+                    metadata.model_digest,
+                    metadata.dimension,
+                    metadata.normalization,
+                    metadata.index_version,
+                    metadata.candidate_version,
+                    metadata.source_fingerprint,
+                    metadata.source_extraction_version,
+                    metadata.candidate_count,
+                    metadata.built_at.isoformat(),
+                ),
+            )
+
+    def get_semantic_index_metadata(self, document_id: UUID) -> SemanticIndexRecord | None:
+        """Return the derived semantic index metadata, if it exists."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT document_id, model_name, model_version, model_digest,
+                       dimension, normalization, index_version, candidate_version,
+                       source_fingerprint, source_extraction_version,
+                       candidate_count, built_at
+                FROM semantic_index_metadata
+                WHERE document_id = ?
+                """,
+                (str(document_id),),
+            ).fetchone()
+        return _row_to_semantic_index(row) if row is not None else None
+
+    def list_semantic_candidates(self, document_id: UUID) -> list[SemanticCandidateRecord]:
+        """Return every persisted candidate of one document in stable order."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT candidate_id, document_id, chunk_id, page_index, page_number,
+                       chunk_index, start_offset, end_offset, source_text,
+                       extraction_version, vector
+                FROM semantic_candidates
+                WHERE document_id = ?
+                ORDER BY page_index ASC, start_offset ASC, chunk_index ASC, candidate_id ASC
+                """,
+                (str(document_id),),
+            ).fetchall()
+        return [_row_to_semantic_candidate(row) for row in rows]
+
+    def delete_semantic_index(self, document_id: UUID) -> bool:
+        """Remove the derived semantic index of one document, keeping its text index."""
+        document_key = str(document_id)
+        with self._connect() as connection:
+            deleted_candidates = connection.execute(
+                "DELETE FROM semantic_candidates WHERE document_id = ?",
+                (document_key,),
+            ).rowcount
+            deleted_metadata = connection.execute(
+                "DELETE FROM semantic_index_metadata WHERE document_id = ?",
+                (document_key,),
+            ).rowcount
+        return bool(deleted_candidates or deleted_metadata)
 
 
 def _row_to_record(row: sqlite3.Row) -> DocumentRecord:
@@ -469,4 +727,37 @@ def _row_to_index_record(row: sqlite3.Row) -> DocumentIndexRecord:
         chunk_count=int(row["chunk_count"]),
         filtered_chunk_count=int(row["filtered_chunk_count"]),
         indexed_at=datetime.fromisoformat(row["indexed_at"]),
+    )
+
+
+def _row_to_semantic_index(row: sqlite3.Row) -> SemanticIndexRecord:
+    return SemanticIndexRecord(
+        document_id=UUID(row["document_id"]),
+        model_name=row["model_name"],
+        model_version=row["model_version"],
+        model_digest=row["model_digest"],
+        dimension=int(row["dimension"]),
+        normalization=row["normalization"],
+        index_version=int(row["index_version"]),
+        candidate_version=int(row["candidate_version"]),
+        source_fingerprint=row["source_fingerprint"],
+        source_extraction_version=row["source_extraction_version"],
+        candidate_count=int(row["candidate_count"]),
+        built_at=datetime.fromisoformat(row["built_at"]),
+    )
+
+
+def _row_to_semantic_candidate(row: sqlite3.Row) -> SemanticCandidateRecord:
+    return SemanticCandidateRecord(
+        candidate_id=row["candidate_id"],
+        document_id=UUID(row["document_id"]),
+        chunk_id=row["chunk_id"],
+        page_index=int(row["page_index"]),
+        page_number=int(row["page_number"]),
+        chunk_index=int(row["chunk_index"]),
+        start_offset=int(row["start_offset"]),
+        end_offset=int(row["end_offset"]),
+        source_text=row["source_text"],
+        extraction_version=row["extraction_version"],
+        vector=bytes(row["vector"]),
     )

@@ -135,9 +135,16 @@ export interface EvidenceLocateResponse {
  * selected by a deterministic punctuation heuristic. It is not proof that the
  * sentence supports every generated conclusion. `retrieval_match` means no
  * reliable sentence could be selected, so the support span is exactly the
- * literal retrieval hit.
+ * literal retrieval hit. `semantic_candidate` means the span is one ranked
+ * semantic candidate; it is not a keyword occurrence.
  */
-export type CitationSupportKind = "sentence" | "retrieval_match";
+export type CitationSupportKind =
+  | "sentence"
+  | "retrieval_match"
+  | "semantic_candidate";
+
+/** Retrieval layer used for one question. */
+export type RetrievalMode = "literal" | "semantic";
 
 /**
  * One retrieved page-text span offered as a question citation.
@@ -147,7 +154,8 @@ export type CitationSupportKind = "sentence" | "retrieval_match";
  * to real PDFium geometry.
  *
  * `support_*` fields are additive. When absent (an older server), callers fall
- * back to the retrieval hit span.
+ * back to the retrieval hit span. Semantic citations carry
+ * `retrieval_kind == "semantic"` and a cosine `score`.
  */
 export interface EvidenceCitation {
   citation_id: string;
@@ -161,6 +169,8 @@ export interface EvidenceCitation {
   hit_text: string;
   chunk_text: string;
   extraction_version: string;
+  retrieval_kind?: RetrievalMode;
+  score?: number | null;
   support_text?: string;
   support_start?: number;
   support_end?: number;
@@ -192,10 +202,26 @@ export interface QuestionAnswerResponse {
   document_id: string;
   question: string;
   retrieval_query: string;
+  retrieval_mode: RetrievalMode;
   match_case: boolean;
   answer_mode: AnswerMode;
   status: QuestionStatus;
   answer: string;
   total_matches: number;
   citations: EvidenceCitation[];
+}
+
+/** Provenance of one derived semantic index build. */
+export interface SemanticIndexResponse {
+  document_id: string;
+  model_name: string;
+  model_version: string;
+  model_digest: string;
+  index_version: number;
+  candidate_version: number;
+  dimension: number;
+  normalization: "l2";
+  source_fingerprint: string;
+  candidate_count: number;
+  built_at: string;
 }

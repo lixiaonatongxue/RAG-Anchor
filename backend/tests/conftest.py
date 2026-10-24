@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from reportlab.pdfgen import canvas
 
 from rag_anchor.config import Settings
+from rag_anchor.infra.embedding import EmbeddingProvider
 from rag_anchor.infra.llm import LLMProvider
 from rag_anchor.main import create_app
 
@@ -76,12 +77,17 @@ def api_factory(tmp_path: Path) -> Iterator[Callable[..., ApiContext]]:
         data_dir: Path | None = None,
         max_upload_bytes: int | None = None,
         llm_provider: LLMProvider | None = None,
+        embedding_provider: EmbeddingProvider | None = None,
     ) -> ApiContext:
         kwargs: dict[str, object] = {"data_dir": data_dir or tmp_path / "data"}
         if max_upload_bytes is not None:
             kwargs["max_upload_bytes"] = max_upload_bytes
         settings = Settings(**kwargs)  # type: ignore[arg-type]
-        application = create_app(settings, llm_provider=llm_provider)
+        application = create_app(
+            settings,
+            llm_provider=llm_provider,
+            embedding_provider=embedding_provider,
+        )
         client = stack.enter_context(TestClient(application))
         return ApiContext(app=application, client=client, settings=settings)
 

@@ -619,6 +619,10 @@ button:disabled {
   color: var(--warning);
   background: var(--surface-sunken);
 }
+.support-pill--semantic_candidate {
+  color: #6d3fa8;
+  background: #f1e9fb;
+}
 
 .result-item.is-active .support-pill {
   color: var(--accent-strong);

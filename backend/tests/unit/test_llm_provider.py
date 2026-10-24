@@ -62,6 +62,9 @@ class RecordingTransport:
         assert self.response is not None
         return self.response
 
+    def get(self, url, *, headers, timeout):
+        raise AssertionError("The LLM provider must not issue GET requests")
+
 
 def _provider(transport: RecordingTransport) -> OpenAICompatibleLLMProvider:
     return OpenAICompatibleLLMProvider(

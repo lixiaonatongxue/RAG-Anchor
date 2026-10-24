@@ -1,0 +1,175 @@
+{
+  "name": "m2-01-multilingual-retrieval-labels-v1",
+  "description": "Hand-labelled small corpus for M2-01 retrieval plumbing. Labels were fixed before running the harness. `relevant` lists exact page-text sentences; an empty list marks an unanswerable query.",
+  "pages": [
+    {
+      "page_index": 0,
+      "lines": [
+        "The project has three stages: ingestion, retrieval, and evidence verification.",
+        "Ingestion converts each PDF page into traceable text."
+      ]
+    },
+    {
+      "page_index": 1,
+      "lines": [
+        "Photos are encrypted before upload and stored with a random identifier.",
+        "The preview image is generated only after the security check."
+      ]
+    },
+    {
+      "page_index": 2,
+      "lines": [
+        "Retrieval latency is measured for every semantic query.",
+        "The evaluation report records each latency result."
+      ]
+    },
+    {
+      "page_index": 3,
+      "lines": [
+        "Retrieval latency is measured for every semantic query.",
+        "The weather forecast is unrelated to this document."
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "id": "en-stages",
+      "question": "Which stages does the project have?",
+      "relevant": [
+        {
+          "page_index": 0,
+          "text": "The project has three stages: ingestion, retrieval, and evidence verification."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 3,
+          "text": "The weather forecast is unrelated to this document."
+        }
+      ]
+    },
+    {
+      "id": "zh-stages",
+      "question": "这个项目有哪些阶段？",
+      "relevant": [
+        {
+          "page_index": 0,
+          "text": "The project has three stages: ingestion, retrieval, and evidence verification."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 3,
+          "text": "The weather forecast is unrelated to this document."
+        }
+      ]
+    },
+    {
+      "id": "zh-security",
+      "question": "照片上传后如何保证安全？",
+      "relevant": [
+        {
+          "page_index": 1,
+          "text": "Photos are encrypted before upload and stored with a random identifier."
+        },
+        {
+          "page_index": 1,
+          "text": "The preview image is generated only after the security check."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 3,
+          "text": "The weather forecast is unrelated to this document."
+        }
+      ]
+    },
+    {
+      "id": "en-privacy",
+      "question": "How are uploads kept private?",
+      "relevant": [
+        {
+          "page_index": 1,
+          "text": "Photos are encrypted before upload and stored with a random identifier."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 3,
+          "text": "The weather forecast is unrelated to this document."
+        }
+      ]
+    },
+    {
+      "id": "en-latency",
+      "question": "Where is retrieval latency measured?",
+      "relevant": [
+        {
+          "page_index": 2,
+          "text": "Retrieval latency is measured for every semantic query."
+        },
+        {
+          "page_index": 3,
+          "text": "Retrieval latency is measured for every semantic query."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 0,
+          "text": "The project has three stages: ingestion, retrieval, and evidence verification."
+        }
+      ]
+    },
+    {
+      "id": "zh-latency",
+      "question": "检索延迟记录在哪里？",
+      "relevant": [
+        {
+          "page_index": 2,
+          "text": "Retrieval latency is measured for every semantic query."
+        },
+        {
+          "page_index": 3,
+          "text": "Retrieval latency is measured for every semantic query."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 1,
+          "text": "The preview image is generated only after the security check."
+        }
+      ]
+    },
+    {
+      "id": "unanswerable",
+      "question": "Who won the 1998 world cup?",
+      "relevant": [],
+      "irrelevant": [
+        {
+          "page_index": 2,
+          "text": "Retrieval latency is measured for every semantic query."
+        },
+        {
+          "page_index": 3,
+          "text": "The weather forecast is unrelated to this document."
+        }
+      ]
+    },
+    {
+      "id": "en-weather",
+      "question": "What does the forecast say?",
+      "relevant": [
+        {
+          "page_index": 3,
+          "text": "The weather forecast is unrelated to this document."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 2,
+          "text": "Retrieval latency is measured for every semantic query."
+        }
+      ]
+    }
+  ]
+}

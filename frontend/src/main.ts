@@ -6,6 +6,8 @@ import type {
   DocumentSummary,
   EvidenceCitation,
   RetrievalHit,
+  RetrievalMode,
+  SemanticIndexResponse,
 } from "./api/types";
 import { paintHighlights } from "./highlight/renderer";
 import {
@@ -20,10 +22,17 @@ import type { ViewerState } from "./pdf/viewer";
 import {
   citationBelongsToDocument,
   citationLabel,
+  citationSupportLabel,
   citationSupportSpan,
   toCitationEvidenceSpan,
 } from "./qa/citation";
-import { answerModeLabel, generationFailureMessage } from "./qa/mode";
+import {
+  answerModeLabel,
+  generationFailureMessage,
+  retrievalModeLabel,
+  semanticFailureMessage,
+  semanticIndexFailureMessage,
+} from "./qa/mode";
 import {
   CHUNK_PAGE_SIZE,
   chunkEmptyMessage,
@@ -75,6 +84,7 @@ const chunkNext = byId<HTMLButtonElement>("chunk-next");
 const chunkResults = byId<HTMLDivElement>("chunk-results");
 
 const qaForm = byId<HTMLFormElement>("qa-form");
+const qaRetrievalMode = byId<HTMLSelectElement>("qa-retrieval-mode");
 const qaMode = byId<HTMLSelectElement>("qa-mode");
 const qaModeNote = byId<HTMLSpanElement>("qa-mode-note");
 const qaQuestion = byId<HTMLTextAreaElement>("qa-question");
@@ -85,6 +95,8 @@ const qaAnswer = byId<HTMLDivElement>("qa-answer");
 const qaAnswerMode = byId<HTMLParagraphElement>("qa-answer-mode");
 const qaAnswerText = byId<HTMLParagraphElement>("qa-answer-text");
 const qaCitations = byId<HTMLDivElement>("qa-citations");
+const semanticIndexButton = byId<HTMLButtonElement>("semantic-index-button");
+const semanticIndexDetail = byId<HTMLSpanElement>("semantic-index-detail");
 
 const searchForm = byId<HTMLFormElement>("search-form");
 const searchInput = byId<HTMLTextAreaElement>("search-input");
@@ -175,6 +187,11 @@ let qaCitationItems: EvidenceCitation[] = [];
 let qaActiveIndex = -1;
 let qaInFlight = false;
 const qaGate = createRequestGate();
+
+let semanticIndexedDocumentId: string | null = null;
+let semanticIndexStats: SemanticIndexResponse | null = null;
+let semanticIndexInFlight = false;
+const semanticIndexGate = createRequestGate();
 
 const viewer = new PdfViewer(
   {
@@ -643,6 +660,7 @@ function resetIndexState(): void {
   indexStats = null;
   indexInFlight = false;
   indexStatus.textContent = "未索引";
+  resetSemanticIndexState();
 }
 
 function resetChunkState(): void {
@@ -666,17 +684,37 @@ function resetChunkState(): void {
   renderChunkResults();
 }
 
+function currentRetrievalMode(): RetrievalMode {
+  return qaRetrievalMode.value === "semantic" ? "semantic" : "literal";
+}
+
 function currentQaMode(): AnswerMode {
   return qaMode.value === "grounded_generation"
     ? "grounded_generation"
     : "evidence_only";
 }
 
+function semanticIndexReady(): boolean {
+  return (
+    Boolean(selectedId) &&
+    indexedDocumentId === selectedId &&
+    semanticIndexedDocumentId === selectedId &&
+    semanticIndexStats !== null
+  );
+}
+
 function updateQaModeNote(): void {
-  qaModeNote.textContent =
-    currentQaMode() === "grounded_generation"
-      ? "调用已配置的模型；引用由服务端校验，结论需人工核对"
-      : "不调用语言模型，仅返回原文证据";
+  const retrieval = currentRetrievalMode();
+  const semantic = retrieval === "semantic";
+  if (currentQaMode() === "grounded_generation") {
+    qaModeNote.textContent = semantic
+      ? "语义召回候选后调用模型；引用由服务端校验，结论需人工核对"
+      : "调用已配置的模型；引用由服务端校验，结论需人工核对";
+    return;
+  }
+  qaModeNote.textContent = semantic
+    ? "语义检索只返回相关性排序的候选证据，不生成结论"
+    : "不调用语言模型，仅返回字面匹配的原文证据";
 }
 
 function qaIdleHint(): string {
@@ -685,6 +723,14 @@ function qaIdleHint(): string {
   }
   if (indexedDocumentId !== selectedId) {
     return "请先建立索引后再提问。";
+  }
+  if (currentRetrievalMode() === "semantic" && !semanticIndexReady()) {
+    return "语义检索需要先建立语义索引。";
+  }
+  if (currentRetrievalMode() === "semantic") {
+    return currentQaMode() === "grounded_generation"
+      ? "已建立语义索引。模型只接收排序后的候选证据，引用由服务端校验。"
+      : "已建立语义索引，可以提问。语义排序不代表事实支持，请核对原文。";
   }
   return currentQaMode() === "grounded_generation"
     ? "已建立索引。AI 生成会调用已配置的模型服务；引用由服务端校验。"
@@ -698,7 +744,9 @@ function resetQaState(): void {
   qaActiveIndex = -1;
   qaInFlight = false;
   qaAnswer.hidden = true;
-  qaAnswerMode.textContent = answerModeLabel(currentQaMode());
+  qaAnswerMode.textContent = `${retrievalModeLabel(
+    currentRetrievalMode()
+  )} · ${answerModeLabel(currentQaMode())}`;
   qaAnswerText.textContent = "";
   qaCitations.replaceChildren();
   qaHint.className = "search-hint";
@@ -708,10 +756,16 @@ function resetQaState(): void {
 
 function updateQaAvailability(): void {
   const indexed = Boolean(selectedId) && indexedDocumentId === selectedId;
-  qaMode.disabled = qaInFlight;
+  const semanticReady =
+    currentRetrievalMode() === "literal" || semanticIndexReady();
+  qaRetrievalMode.disabled = qaInFlight || semanticIndexInFlight;
+  qaMode.disabled = qaInFlight || semanticIndexInFlight;
+  qaQuery.disabled = qaInFlight || currentRetrievalMode() === "semantic";
   qaSubmit.disabled =
     !indexed ||
+    !semanticReady ||
     indexInFlight ||
+    semanticIndexInFlight ||
     qaInFlight ||
     qaQuestion.value.trim().length === 0;
   if (qaInFlight) {
@@ -721,6 +775,63 @@ function updateQaAvailability(): void {
     qaSubmit.textContent =
       currentQaMode() === "grounded_generation" ? "生成回答" : "提问";
   }
+}
+
+function updateSemanticAvailability(): void {
+  const document = documents.find((item) => item.document_id === selectedId);
+  if (!document) {
+    semanticIndexButton.disabled = true;
+    semanticIndexButton.textContent = "建立语义索引";
+    semanticIndexDetail.textContent = "选择一个文档后可建立语义索引。";
+    return;
+  }
+  if (semanticIndexInFlight) {
+    semanticIndexButton.disabled = true;
+    semanticIndexButton.textContent = "语义索引建立中…";
+    semanticIndexDetail.textContent = "正在调用 Embedding 服务并保存候选向量。";
+    return;
+  }
+  if (indexInFlight) {
+    semanticIndexButton.disabled = true;
+    semanticIndexButton.textContent = "建立语义索引";
+    semanticIndexDetail.textContent = "请等待文本索引建立完成。";
+    return;
+  }
+  if (qaInFlight) {
+    const built =
+      semanticIndexedDocumentId === document.document_id && semanticIndexStats;
+    semanticIndexButton.disabled = true;
+    semanticIndexButton.textContent = built ? "重建语义索引" : "建立语义索引";
+    semanticIndexDetail.textContent = "请等待当前问答完成后再重建语义索引。";
+    return;
+  }
+  if (indexedDocumentId !== document.document_id) {
+    semanticIndexButton.disabled = true;
+    semanticIndexButton.textContent = "建立语义索引";
+    semanticIndexDetail.textContent = "请先建立文本索引，再建立语义索引。";
+    return;
+  }
+  if (
+    semanticIndexedDocumentId === document.document_id &&
+    semanticIndexStats
+  ) {
+    semanticIndexButton.disabled = false;
+    semanticIndexButton.textContent = "重建语义索引";
+    semanticIndexDetail.textContent = `已建立语义索引：${semanticIndexStats.candidate_count} 个候选 · ${semanticIndexStats.model_name}/${semanticIndexStats.model_version} · ${semanticIndexStats.dimension} 维。`;
+    return;
+  }
+  semanticIndexButton.disabled = false;
+  semanticIndexButton.textContent = "建立语义索引";
+  semanticIndexDetail.textContent =
+    "语义检索需要单独建立向量索引（会调用 Embedding 服务）。";
+}
+
+function resetSemanticIndexState(): void {
+  semanticIndexGate.begin();
+  semanticIndexedDocumentId = null;
+  semanticIndexStats = null;
+  semanticIndexInFlight = false;
+  updateSemanticAvailability();
 }
 
 function updateIndexAvailability(): void {
@@ -765,8 +876,10 @@ async function performIndex(): Promise<void> {
   indexStatus.textContent = "索引中";
   updateIndexAvailability();
   // Re-indexing can replace chunk identifiers, so old answers and any
-  // in-flight question must not survive into the new index.
+  // in-flight question must not survive into the new index. The backend also
+  // invalidates the derived semantic index, which must be rebuilt.
   resetQaState();
+  resetSemanticIndexState();
 
   try {
     const stats = await api.indexDocument(documentId);
@@ -792,7 +905,67 @@ async function performIndex(): Promise<void> {
     if (selectedId === documentId) {
       indexInFlight = false;
       updateIndexAvailability();
+      updateSemanticAvailability();
       updateChunkAvailability();
+      updateQaAvailability();
+    }
+  }
+}
+
+async function performSemanticIndex(): Promise<void> {
+  const documentId = selectedId;
+  if (
+    !documentId ||
+    semanticIndexInFlight ||
+    qaInFlight ||
+    indexInFlight ||
+    indexedDocumentId !== documentId
+  ) {
+    return;
+  }
+
+  const token = semanticIndexGate.begin();
+  // The rebuild replaces the vector index and every candidate citation it
+  // produced. Invalidate an in-flight answer and clear the displayed one before
+  // the request starts, so a late response cannot restore the old answer.
+  resetQaState();
+  semanticIndexInFlight = true;
+  updateSemanticAvailability();
+  updateQaAvailability();
+  qaHint.className = "search-hint is-info";
+  qaHint.textContent = "正在建立语义索引（会调用 Embedding 服务）…";
+
+  try {
+    const stats = await api.buildSemanticIndex(documentId);
+    if (
+      !semanticIndexGate.isCurrent(token) ||
+      selectedId !== documentId ||
+      indexedDocumentId !== documentId
+    ) {
+      return;
+    }
+    semanticIndexedDocumentId = documentId;
+    semanticIndexStats = stats;
+    showToast(
+      `已建立语义索引：${stats.candidate_count} 个候选 · ${stats.dimension} 维。`,
+      "success"
+    );
+    qaHint.className = "search-hint";
+    qaHint.textContent = qaIdleHint();
+  } catch (error) {
+    if (!semanticIndexGate.isCurrent(token) || selectedId !== documentId) {
+      return;
+    }
+    const status = error instanceof ApiError ? error.status : 0;
+    const message =
+      semanticIndexFailureMessage(status) ?? friendlyError(error);
+    qaHint.className = "search-hint is-error";
+    qaHint.textContent = message;
+    showToast(message, "error");
+  } finally {
+    if (semanticIndexGate.isCurrent(token) && selectedId === documentId) {
+      semanticIndexInFlight = false;
+      updateSemanticAvailability();
       updateQaAvailability();
     }
   }
@@ -981,8 +1154,6 @@ function renderQaCitations(): void {
 
   qaCitationItems.forEach((citation, index) => {
     const support = citationSupportSpan(citation);
-    const supportLabel =
-      support.kind === "sentence" ? "支持句" : "仅检索命中";
     const button = document.createElement("button");
     button.type = "button";
     button.className = `result-item qa-citation${
@@ -1010,13 +1181,24 @@ function renderQaCitations(): void {
 
     const supportPill = document.createElement("span");
     supportPill.className = `support-pill support-pill--${support.kind}`;
-    supportPill.textContent = supportLabel;
+    supportPill.textContent = citationSupportLabel(support.kind);
+
+    topLine.append(citationPill, pagePill, supportPill);
+    if (
+      support.kind === "semantic_candidate" &&
+      typeof citation.score === "number"
+    ) {
+      const scorePill = document.createElement("span");
+      scorePill.className = "support-pill support-pill--semantic_candidate";
+      scorePill.textContent = `相似度 ${citation.score.toFixed(3)}`;
+      topLine.append(scorePill);
+    }
 
     const charRange = document.createElement("span");
     charRange.className = "result-char";
     charRange.textContent = `字符 ${support.start}–${support.end}`;
 
-    topLine.append(citationPill, pagePill, supportPill, charRange);
+    topLine.append(charRange);
 
     const text = document.createElement("p");
     text.className = "result-text";
@@ -1038,7 +1220,7 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
   event.preventDefault();
 
   const documentId = selectedId;
-  if (!documentId || qaInFlight) {
+  if (!documentId || qaInFlight || semanticIndexInFlight) {
     return;
   }
   if (indexedDocumentId !== documentId) {
@@ -1057,37 +1239,54 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
 
   const retrievalQuery = qaQuery.value.trim();
   const mode = currentQaMode();
+  const retrievalMode = currentRetrievalMode();
+  if (retrievalMode === "semantic" && !semanticIndexReady()) {
+    qaHint.className = "search-hint is-error";
+    qaHint.textContent = "请先建立语义索引后再使用语义检索。";
+    return;
+  }
   const token = qaGate.begin();
   locateGate.begin();
   qaInFlight = true;
   qaCitationItems = [];
   qaActiveIndex = -1;
   qaAnswer.hidden = true;
-  qaAnswerMode.textContent = answerModeLabel(mode);
+  qaAnswerMode.textContent = `${retrievalModeLabel(
+    retrievalMode
+  )} · ${answerModeLabel(mode)}`;
   qaAnswerText.textContent = "";
   qaCitations.replaceChildren();
   qaHint.className = "search-hint is-info";
-  qaHint.textContent =
-    mode === "grounded_generation"
-      ? "正在生成回答（引用将由服务端校验）…"
-      : "正在检索原文证据…";
+  if (mode === "grounded_generation") {
+    qaHint.textContent = "正在生成回答（引用将由服务端校验）…";
+  } else if (retrievalMode === "semantic") {
+    qaHint.textContent = "正在按语义相似度检索候选证据…";
+  } else {
+    qaHint.textContent = "正在检索原文证据…";
+  }
   updateQaAvailability();
 
   try {
     const response = await api.askQuestion(documentId, {
       question,
-      retrievalQuery: retrievalQuery || undefined,
+      retrievalQuery:
+        retrievalMode === "literal" ? retrievalQuery || undefined : undefined,
+      retrievalMode,
       answerMode: mode,
     });
     if (
       !qaGate.isCurrent(token) ||
       selectedId !== documentId ||
-      currentQaMode() !== mode
+      currentQaMode() !== mode ||
+      currentRetrievalMode() !== retrievalMode
     ) {
       return;
     }
-    if (response.answer_mode !== mode) {
-      throw new Error("后端返回了与请求不一致的问答模式。");
+    if (
+      response.answer_mode !== mode ||
+      response.retrieval_mode !== retrievalMode
+    ) {
+      throw new Error("后端返回了与请求不一致的问答或检索模式。");
     }
 
     qaInFlight = false;
@@ -1100,25 +1299,30 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
     if (response.status === "insufficient_evidence") {
       qaHint.className = "search-hint";
       qaHint.textContent =
-        mode === "grounded_generation"
-          ? "模型未返回可验证的原文证据引用，系统已明确拒答。"
-          : "没有找到可支持回答的原文证据，已明确拒答。";
+        retrievalMode === "semantic"
+          ? "语义检索没有找到相似度足够的候选证据，系统已明确拒答。"
+          : mode === "grounded_generation"
+            ? "模型未返回可验证的原文证据引用，系统已明确拒答。"
+            : "没有找到可支持回答的原文证据，已明确拒答。";
     } else if (mode === "grounded_generation") {
       qaHint.className = "search-hint is-info";
-      qaHint.textContent = `AI 生成完成：按字面「${response.retrieval_query}」检索到 ${
-        response.total_matches
-      } 条证据，引用 ${response.citations.length} 条。引用编号已校验，结论请核对原文。`;
+      qaHint.textContent =
+        retrievalMode === "semantic"
+          ? `AI 生成完成（语义检索）：检索到 ${response.total_matches} 条候选证据，引用 ${response.citations.length} 条。引用编号已校验，语义排序不代表事实支持，结论请核对原文。`
+          : `AI 生成完成：按字面「${response.retrieval_query}」检索到 ${response.total_matches} 条证据，引用 ${response.citations.length} 条。引用编号已校验，结论请核对原文。`;
     } else {
       qaHint.className = "search-hint is-info";
-      qaHint.textContent = `按字面「${response.retrieval_query}」找到 ${
-        response.total_matches
-      } 条证据，返回 ${response.citations.length} 条引用。`;
+      qaHint.textContent =
+        retrievalMode === "semantic"
+          ? `按语义检索找到 ${response.total_matches} 条候选证据，返回 ${response.citations.length} 条引用。语义排序不代表事实支持，请核对原文。`
+          : `按字面「${response.retrieval_query}」找到 ${response.total_matches} 条证据，返回 ${response.citations.length} 条引用。`;
     }
   } catch (error) {
     if (
       !qaGate.isCurrent(token) ||
       selectedId !== documentId ||
-      currentQaMode() !== mode
+      currentQaMode() !== mode ||
+      currentRetrievalMode() !== retrievalMode
     ) {
       return;
     }
@@ -1131,9 +1335,11 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
     const status = error instanceof ApiError ? error.status : 0;
     const fallback = friendlyError(error);
     const message =
-      mode === "grounded_generation"
-        ? generationFailureMessage(status) ?? fallback
-        : fallback;
+      semanticFailureMessage(status, retrievalMode) ??
+      (mode === "grounded_generation"
+        ? generationFailureMessage(status)
+        : null) ??
+      fallback;
     qaHint.className = "search-hint is-error";
     qaHint.textContent = message;
     showToast(message, "error");
@@ -1141,7 +1347,8 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
     if (
       qaGate.isCurrent(token) &&
       selectedId === documentId &&
-      currentQaMode() === mode
+      currentQaMode() === mode &&
+      currentRetrievalMode() === retrievalMode
     ) {
       qaInFlight = false;
       updateQaAvailability();
@@ -1489,6 +1696,10 @@ indexButton.addEventListener("click", () => {
   void performIndex();
 });
 
+semanticIndexButton.addEventListener("click", () => {
+  void performSemanticIndex();
+});
+
 chunkForm.addEventListener("submit", (event) => {
   performChunkSearch(event);
 });
@@ -1524,6 +1735,11 @@ qaMode.addEventListener("change", () => {
   resetQaState();
 });
 
+qaRetrievalMode.addEventListener("change", () => {
+  updateQaModeNote();
+  resetQaState();
+});
+
 /* ---------- Bootstrap ---------- */
 
 window.addEventListener("beforeunload", () => {
@@ -1531,6 +1747,7 @@ window.addEventListener("beforeunload", () => {
 });
 
 updateQaModeNote();
+updateSemanticAvailability();
 documentCount.textContent = "0";
 renderResults();
 renderChunkResults();

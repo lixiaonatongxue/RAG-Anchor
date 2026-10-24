@@ -68,7 +68,17 @@ class HTTPResponse:
 
 
 class HTTPTransport(Protocol):
-    """The tiny HTTP surface needed by the provider, injectable for tests."""
+    """The tiny HTTP surface needed by the providers, injectable for tests."""
+
+    def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> HTTPResponse:
+        """GET ``url`` and return the response status and bytes."""
+        ...
 
     def post(
         self,
@@ -90,13 +100,27 @@ class _NoRedirectHandler(urlrequest.HTTPRedirectHandler):
 
 
 class UrllibHTTPTransport:
-    """Standard-library JSON POST transport with proxies disabled."""
+    """Standard-library HTTP transport with proxies disabled."""
 
     def __init__(self) -> None:
         self._opener = urlrequest.build_opener(
             urlrequest.ProxyHandler({}),
             _NoRedirectHandler(),
         )
+
+    def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> HTTPResponse:
+        request = urlrequest.Request(
+            url,
+            headers=dict(headers),
+            method="GET",
+        )
+        return self._perform(request, timeout=timeout)
 
     def post(
         self,
@@ -112,6 +136,9 @@ class UrllibHTTPTransport:
             headers=dict(headers),
             method="POST",
         )
+        return self._perform(request, timeout=timeout)
+
+    def _perform(self, request: urlrequest.Request, *, timeout: float) -> HTTPResponse:
         try:
             with self._opener.open(request, timeout=timeout) as response:
                 return HTTPResponse(status=response.getcode(), body=response.read())

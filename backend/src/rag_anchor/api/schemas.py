@@ -62,6 +62,32 @@ class DocumentIndexResponse(BaseModel):
     indexed_at: datetime
 
 
+class SemanticIndexResponse(BaseModel):
+    """Statistics of one completed derived semantic index build.
+
+    ``source_fingerprint`` identifies the text index the vectors were built
+    from. ``model_name``/``model_version``/``model_digest``/``dimension``/
+    ``normalization`` identify the embedding used; a later query is rejected
+    when the active provider no longer matches them. ``index_version`` and
+    ``candidate_version`` record the persisted layout and split rules, so an
+    index produced by an older build is never treated as compatible.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    document_id: UUID
+    model_name: str
+    model_version: str
+    model_digest: str
+    index_version: int = Field(ge=0)
+    candidate_version: int = Field(ge=0)
+    dimension: int = Field(gt=0)
+    normalization: Literal["l2"]
+    source_fingerprint: str
+    candidate_count: int = Field(ge=0)
+    built_at: datetime
+
+
 class AnchorSearchRequest(BaseModel):
     """Search payload for one stored document."""
 
@@ -253,14 +279,18 @@ class EvidenceLocateResponse(BaseModel):
 class QuestionRequest(BaseModel):
     """One question scoped to an indexed document.
 
-    Retrieval is always literal; no semantic interpretation is performed.
-    ``answer_mode`` defaults to ``evidence_only``, preserving the existing
-    no-model behavior. ``grounded_generation`` only calls a model when the
-    server is explicitly configured and enabled.
+    ``retrieval_mode`` defaults to ``literal`` and preserves the M1 behavior
+    exactly: substring matching over persisted chunks. ``semantic`` embeds the
+    question itself (``retrieval_query`` is ignored) and ranks derived
+    candidates; it requires a separately built semantic index and never falls
+    back to literal matching. ``answer_mode`` defaults to ``evidence_only``,
+    preserving the existing no-model behavior. ``grounded_generation`` only
+    calls a model when the server is explicitly configured and enabled.
     """
 
     question: str = Field(min_length=1, max_length=MAX_QUESTION_LENGTH)
     retrieval_query: str | None = Field(default=None, max_length=MAX_QUERY_LENGTH)
+    retrieval_mode: Literal["literal", "semantic"] = "literal"
     match_case: bool = False
     max_citations: int = Field(default=DEFAULT_MAX_CITATIONS, ge=1, le=MAX_CITATIONS)
     answer_mode: Literal["evidence_only", "grounded_generation"] = "evidence_only"
@@ -284,16 +314,20 @@ class EvidenceCitationResponse(BaseModel):
     """One retrieved page-text span, ready for the evidence locate endpoint.
 
     ``match_start``/``match_end`` are Python string offsets into the stored
-    page text, exactly as returned by chunk retrieval. No PDF coordinates are
-    produced by question answering.
+    page text. For a literal citation they delimit the keyword occurrence; for
+    a semantic citation they delimit the ranked candidate span. They are never
+    PDF coordinates, and question answering never produces geometry.
 
-    ``support_start``/``support_end`` delimit the span that should be located
-    on click. They either cover the complete sentence containing the retrieval
-    hit (``support_kind == "sentence"``) or exactly the retrieval hit
-    (``support_kind == "retrieval_match"``) when no reliable sentence could be
-    determined. Both kinds are exact slices of the stored page text and stay
-    inside the citation's chunk; ``support_kind`` never claims factual support
-    for a generated answer.
+    ``retrieval_kind`` makes the difference explicit. A ``semantic`` citation
+    carries a cosine ``score`` and ``support_kind == "semantic_candidate"``;
+    its span is the candidate itself, not a keyword match. A ``literal``
+    citation keeps the M1 contract: ``support_*`` covers the complete sentence
+    containing the hit (``support_kind == "sentence"``) or exactly the hit
+    (``support_kind == "retrieval_match"``).
+
+    Both kinds are exact slices of the stored page text and stay inside the
+    citation's chunk; ``support_kind`` never claims factual support for a
+    generated answer.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -309,10 +343,12 @@ class EvidenceCitationResponse(BaseModel):
     hit_text: str
     chunk_text: str
     extraction_version: str
+    retrieval_kind: Literal["literal", "semantic"] = "literal"
+    score: float | None = None
     support_text: str = Field(min_length=1)
     support_start: int = Field(ge=0)
     support_end: int = Field(ge=1)
-    support_kind: Literal["sentence", "retrieval_match"]
+    support_kind: Literal["sentence", "retrieval_match", "semantic_candidate"]
 
     @model_validator(mode="after")
     def _support_span_must_contain_the_hit(self) -> EvidenceCitationResponse:
@@ -322,22 +358,37 @@ class EvidenceCitationResponse(BaseModel):
             raise ValueError("support_text length must equal support_end - support_start")
         if self.support_start > self.match_start or self.support_end < self.match_end:
             raise ValueError("support span must contain the retrieval hit")
+        if self.retrieval_kind == "semantic":
+            if self.support_kind != "semantic_candidate":
+                raise ValueError("semantic citations must use a semantic candidate support")
+            if self.score is None:
+                raise ValueError("semantic citations must include a similarity score")
+            if self.support_start != self.match_start or self.support_end != self.match_end:
+                raise ValueError("semantic support span must equal the candidate span")
+        else:
+            if self.support_kind == "semantic_candidate":
+                raise ValueError("literal citations cannot use a semantic candidate support")
+            if self.score is not None:
+                raise ValueError("literal citations cannot include a semantic score")
         return self
 
 
 class QuestionResponse(BaseModel):
     """Answer plus independently verifiable citations.
 
-    In ``evidence_only`` mode ``answer`` is a fixed server notice. In
-    ``grounded_generation`` mode it is model text whose citation IDs were
-    validated by the server; that does not prove every sentence is supported.
-    Every citation itself is reconstructed from the persisted chunk index of
-    ``document_id``, never from model output.
+    ``retrieval_mode`` echoes the requested layer. Literal citations are
+    keyword occurrences; semantic citations are ranked candidate spans and
+    carry a cosine score. In ``evidence_only`` mode ``answer`` is a fixed
+    server notice. In ``grounded_generation`` mode it is model text whose
+    citation IDs were validated by the server; that does not prove every
+    sentence is supported. Every citation itself is reconstructed from the
+    persisted index of ``document_id``, never from model output.
     """
 
     document_id: UUID
     question: str
     retrieval_query: str
+    retrieval_mode: Literal["literal", "semantic"]
     match_case: bool
     answer_mode: Literal["evidence_only", "grounded_generation"]
     status: Literal["evidence_found", "insufficient_evidence", "answered"]

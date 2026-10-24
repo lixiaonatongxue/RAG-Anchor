@@ -191,7 +191,25 @@
               <h2>证据问答</h2>
               <span class="panel-hint">证据展示 / AI 生成 · 引用校验</span>
             </div>
+            <div class="index-row">
+              <button
+                class="ghost-button"
+                id="semantic-index-button"
+                type="button"
+                disabled
+              >
+                建立语义索引
+              </button>
+              <span class="panel-hint" id="semantic-index-detail"
+                >语义检索需要单独建立向量索引。</span
+              >
+            </div>
             <form class="search-form" id="qa-form">
+              <label class="field-label" for="qa-retrieval-mode">检索方式</label>
+              <select class="qa-mode" id="qa-retrieval-mode">
+                <option value="literal" selected>关键词（字面匹配）</option>
+                <option value="semantic">语义（需先建立语义索引）</option>
+              </select>
               <label class="field-label" for="qa-mode">回答模式</label>
               <select class="qa-mode" id="qa-mode">
                 <option value="evidence_only" selected>
@@ -209,13 +227,13 @@
                 spellcheck="false"
               ></textarea>
               <label class="field-label" for="qa-query"
-                >检索关键词（可选，字面匹配）</label
+                >检索文本（仅关键词模式，可选；默认使用问题原文）</label
               >
               <input
                 class="qa-query"
                 id="qa-query"
                 type="text"
-                placeholder="留空则使用问题原文；建议填写文档原文词句"
+                placeholder="关键词模式可填写文档原文词句；语义模式直接使用问题原文"
                 spellcheck="false"
               />
               <div class="qa-controls">

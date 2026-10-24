@@ -30,6 +30,7 @@ RESPONSE_FIELDS = {
     "document_id",
     "question",
     "retrieval_query",
+    "retrieval_mode",
     "match_case",
     "answer_mode",
     "status",
@@ -50,6 +51,8 @@ CITATION_FIELDS = {
     "hit_text",
     "chunk_text",
     "extraction_version",
+    "retrieval_kind",
+    "score",
     "support_text",
     "support_start",
     "support_end",
@@ -143,6 +146,7 @@ def test_evidence_only_answer_returns_traceable_citations(api, single_page_pdf: 
     assert body["document_id"] == document_id
     assert body["question"] == "What does the document say about the animal?"
     assert body["retrieval_query"] == "quick"
+    assert body["retrieval_mode"] == "literal"
     assert body["match_case"] is True
     assert body["answer_mode"] == "evidence_only"
     assert body["status"] == "evidence_found"

@@ -8,6 +8,8 @@ import type {
   EvidenceLocateResponse,
   EvidenceSpanRequest,
   QuestionAnswerResponse,
+  RetrievalMode,
+  SemanticIndexResponse,
 } from "./types";
 
 const API_BASE = "/api/v1";
@@ -141,6 +143,13 @@ export class RagAnchorApi {
     );
   }
 
+  buildSemanticIndex(documentId: string): Promise<SemanticIndexResponse> {
+    return request<SemanticIndexResponse>(
+      `${API_BASE}/documents/${encodeURIComponent(documentId)}/semantic-index`,
+      { method: "POST" }
+    );
+  }
+
   searchChunks(options: {
     query: string;
     documentId: string;
@@ -180,6 +189,7 @@ export class RagAnchorApi {
     options: {
       question: string;
       retrievalQuery?: string;
+      retrievalMode?: RetrievalMode;
       matchCase?: boolean;
       maxCitations?: number;
       answerMode?: AnswerMode;
@@ -187,6 +197,7 @@ export class RagAnchorApi {
   ): Promise<QuestionAnswerResponse> {
     const body: Record<string, unknown> = {
       question: options.question,
+      retrieval_mode: options.retrievalMode ?? "literal",
       answer_mode: options.answerMode ?? "evidence_only",
       match_case: options.matchCase ?? false,
       max_citations: options.maxCitations ?? 5,

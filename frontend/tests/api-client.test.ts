@@ -12,6 +12,7 @@ import type {
   LocatedEvidence,
   QuestionAnswerResponse,
   RetrievalHit,
+  SemanticIndexResponse,
 } from "../src/api/types";
 
 const api = new RagAnchorApi();
@@ -333,6 +334,38 @@ describe("RagAnchorApi.indexDocument", () => {
   });
 });
 
+describe("RagAnchorApi.buildSemanticIndex", () => {
+  it("posts to the semantic-index endpoint and parses provenance", async () => {
+    const payload: SemanticIndexResponse = {
+      document_id: documentSummary.document_id,
+      model_name: "bge-m3",
+      model_version: "0.1",
+      model_digest: "sha256:abc123",
+      dimension: 1024,
+      normalization: "l2",
+      index_version: 1,
+      candidate_version: 1,
+      source_fingerprint: "abc123",
+      candidate_count: 42,
+      built_at: "2026-10-20T10:00:00Z",
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(payload));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.buildSemanticIndex(documentSummary.document_id);
+
+    expect(result).toEqual(payload);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `/api/v1/documents/${documentSummary.document_id}/semantic-index`
+    );
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeUndefined();
+  });
+});
+
 describe("RagAnchorApi.searchChunks", () => {
   it("sends query, document_id, match_case, limit and offset as JSON", async () => {
     const payload: ChunkRetrievalResponse = {
@@ -438,6 +471,7 @@ const questionAnswer: QuestionAnswerResponse = {
   document_id: documentSummary.document_id,
   question: "What does the document say?",
   retrieval_query: "quick",
+  retrieval_mode: "literal",
   match_case: false,
   answer_mode: "evidence_only",
   status: "evidence_found",
@@ -478,6 +512,7 @@ describe("RagAnchorApi.askQuestion", () => {
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body))).toEqual({
       question: "What does the document say?",
+      retrieval_mode: "literal",
       answer_mode: "evidence_only",
       match_case: false,
       max_citations: 5,
@@ -498,6 +533,30 @@ describe("RagAnchorApi.askQuestion", () => {
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(String(init?.body))).toEqual({
       question: "What does the document say?",
+      retrieval_mode: "literal",
+      answer_mode: "evidence_only",
+      match_case: false,
+      max_citations: 5,
+    });
+  });
+
+  it("requests semantic retrieval when that mode is selected", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        jsonResponse({ ...questionAnswer, retrieval_mode: "semantic" })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.askQuestion(documentSummary.document_id, {
+      question: "这个项目有哪些阶段？",
+      retrievalMode: "semantic",
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(init?.body))).toEqual({
+      question: "这个项目有哪些阶段？",
+      retrieval_mode: "semantic",
       answer_mode: "evidence_only",
       match_case: false,
       max_citations: 5,
@@ -518,6 +577,7 @@ describe("RagAnchorApi.askQuestion", () => {
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(String(init?.body))).toEqual({
       question: "quick",
+      retrieval_mode: "literal",
       answer_mode: "grounded_generation",
       match_case: false,
       max_citations: 5,
