@@ -1,6 +1,16 @@
 {
-  "name": "m2-01-multilingual-retrieval-labels-v1",
-  "description": "Hand-labelled small corpus for M2-01 retrieval plumbing. Labels were fixed before running the harness. `relevant` lists exact page-text sentences; an empty list marks an unanswerable query.",
+  "name": "m2-01-multilingual-retrieval-labels-v2.1",
+  "description": "Human-adjudicated revision of the v2 fixed corpus for comparing literal and semantic retrieval. Labels were checked against the stored page text and the original questions; model-generated answers were not used to choose them. `relevant` lists exact page-text sentences that directly answer the question; an empty list marks an unanswerable query. `irrelevant` documents near-miss candidates used to audit distractor behaviour. Unanswerable queries are excluded from Recall@K and reported separately.",
+  "category_legend": {
+    "zh_to_en": "Chinese question whose supporting evidence is English source text.",
+    "en_paraphrase": "English question whose wording differs from the stored evidence.",
+    "cross_page": "The answer requires evidence from more than one page.",
+    "partial_candidates": "Several topically related candidates exist but only some truly support the question.",
+    "keyword_distractor": "A shared keyword pulls in candidates that do not answer the question.",
+    "different_conclusion": "A similar topic carries a different or opposite conclusion.",
+    "unanswerable": "No sentence in the document answers the question; excluded from Recall@K.",
+    "recall_vs_top1": "At least one lexical distractor can outrank the sole supporting span, so Recall@5 and Top-1 can disagree."
+  },
   "pages": [
     {
       "page_index": 0,
@@ -29,11 +39,99 @@
         "Retrieval latency is measured for every semantic query.",
         "The weather forecast is unrelated to this document."
       ]
+    },
+    {
+      "page_index": 4,
+      "lines": [
+        "The cache is purged every night at two in the morning.",
+        "Cached pages are never served after a purge."
+      ]
+    },
+    {
+      "page_index": 5,
+      "lines": [
+        "The cache policy for the demo environment is still undecided.",
+        "A cache hit rate below fifty percent triggers an alert."
+      ]
+    },
+    {
+      "page_index": 6,
+      "lines": [
+        "User uploads are retained for thirty days after deletion.",
+        "Backup copies of deleted uploads are kept for ninety days."
+      ]
+    },
+    {
+      "page_index": 7,
+      "lines": [
+        "Personal exports are deleted immediately after download.",
+        "Deleted personal exports are never kept in backups."
+      ]
+    },
+    {
+      "page_index": 8,
+      "lines": [
+        "Only the document owner may grant access to a shared file.",
+        "Access grants expire automatically after seven days."
+      ]
+    },
+    {
+      "page_index": 9,
+      "lines": [
+        "The audit log records every access grant change.",
+        "Each audit entry includes the actor and the timestamp.",
+        "Audit entries are retained for one year."
+      ]
+    },
+    {
+      "page_index": 10,
+      "lines": [
+        "The retry limit for uploads is three attempts.",
+        "Upload retries use exponential backoff with a two-second base.",
+        "Download retries are unlimited in the desktop client."
+      ]
+    },
+    {
+      "page_index": 11,
+      "lines": [
+        "The maximum file size for a single upload is twenty megabytes.",
+        "The maximum number of pages in a PDF is five hundred.",
+        "PDF previews are limited to the first ten pages."
+      ]
+    },
+    {
+      "page_index": 12,
+      "lines": [
+        "Operators receive alerts when the queue depth exceeds one hundred jobs.",
+        "Operators rotate the alert routing list every quarter."
+      ]
+    },
+    {
+      "page_index": 13,
+      "lines": [
+        "The service does not support password-based login.",
+        "Authentication requires a hardware security key."
+      ]
+    },
+    {
+      "page_index": 14,
+      "lines": [
+        "Seasonal weather does not affect the retention schedule.",
+        "The weather service publishes a forecast every morning."
+      ]
+    },
+    {
+      "page_index": 15,
+      "lines": [
+        "A retrieval score below the configured minimum is filtered out.",
+        "The retrieval minimum score is configurable per deployment."
+      ]
     }
   ],
   "queries": [
     {
       "id": "en-stages",
+      "category": "en_paraphrase",
       "question": "Which stages does the project have?",
       "relevant": [
         {
@@ -50,6 +148,7 @@
     },
     {
       "id": "zh-stages",
+      "category": "zh_to_en",
       "question": "这个项目有哪些阶段？",
       "relevant": [
         {
@@ -66,6 +165,7 @@
     },
     {
       "id": "zh-security",
+      "category": "zh_to_en",
       "question": "照片上传后如何保证安全？",
       "relevant": [
         {
@@ -86,6 +186,7 @@
     },
     {
       "id": "en-privacy",
+      "category": "en_paraphrase",
       "question": "How are uploads kept private?",
       "relevant": [
         {
@@ -102,6 +203,7 @@
     },
     {
       "id": "en-latency",
+      "category": "cross_page",
       "question": "Where is retrieval latency measured?",
       "relevant": [
         {
@@ -122,8 +224,19 @@
     },
     {
       "id": "zh-latency",
+      "category": "zh_to_en",
       "question": "检索延迟记录在哪里？",
       "relevant": [
+        {
+          "page_index": 2,
+          "text": "The evaluation report records each latency result."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 1,
+          "text": "The preview image is generated only after the security check."
+        },
         {
           "page_index": 2,
           "text": "Retrieval latency is measured for every semantic query."
@@ -132,16 +245,11 @@
           "page_index": 3,
           "text": "Retrieval latency is measured for every semantic query."
         }
-      ],
-      "irrelevant": [
-        {
-          "page_index": 1,
-          "text": "The preview image is generated only after the security check."
-        }
       ]
     },
     {
       "id": "unanswerable",
+      "category": "unanswerable",
       "question": "Who won the 1998 world cup?",
       "relevant": [],
       "irrelevant": [
@@ -157,17 +265,684 @@
     },
     {
       "id": "en-weather",
+      "category": "unanswerable",
       "question": "What does the forecast say?",
-      "relevant": [
-        {
-          "page_index": 3,
-          "text": "The weather forecast is unrelated to this document."
-        }
-      ],
+      "relevant": [],
       "irrelevant": [
         {
           "page_index": 2,
           "text": "Retrieval latency is measured for every semantic query."
+        },
+        {
+          "page_index": 14,
+          "text": "The weather service publishes a forecast every morning."
+        }
+      ]
+    },
+    {
+      "id": "zh-cache-purge",
+      "category": "zh_to_en",
+      "question": "缓存页面在什么时间被清理？",
+      "relevant": [
+        {
+          "page_index": 4,
+          "text": "The cache is purged every night at two in the morning."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 4,
+          "text": "Cached pages are never served after a purge."
+        },
+        {
+          "page_index": 5,
+          "text": "A cache hit rate below fifty percent triggers an alert."
+        }
+      ]
+    },
+    {
+      "id": "zh-audit-content",
+      "category": "zh_to_en",
+      "question": "审计条目包含哪些信息？",
+      "relevant": [
+        {
+          "page_index": 9,
+          "text": "Each audit entry includes the actor and the timestamp."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 9,
+          "text": "The audit log records every access grant change."
+        },
+        {
+          "page_index": 9,
+          "text": "Audit entries are retained for one year."
+        }
+      ]
+    },
+    {
+      "id": "zh-upload-size",
+      "category": "zh_to_en",
+      "question": "单个上传文件的最大体积是多少？",
+      "relevant": [
+        {
+          "page_index": 11,
+          "text": "The maximum file size for a single upload is twenty megabytes."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 11,
+          "text": "The maximum number of pages in a PDF is five hundred."
+        },
+        {
+          "page_index": 11,
+          "text": "PDF previews are limited to the first ten pages."
+        }
+      ]
+    },
+    {
+      "id": "en-backup-retention",
+      "category": "en_paraphrase",
+      "question": "How long do backup copies of deleted uploads survive?",
+      "relevant": [
+        {
+          "page_index": 6,
+          "text": "Backup copies of deleted uploads are kept for ninety days."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 6,
+          "text": "User uploads are retained for thirty days after deletion."
+        },
+        {
+          "page_index": 7,
+          "text": "Deleted personal exports are never kept in backups."
+        }
+      ]
+    },
+    {
+      "id": "en-access-expiry",
+      "category": "en_paraphrase",
+      "question": "When do access grants stop being valid?",
+      "relevant": [
+        {
+          "page_index": 8,
+          "text": "Access grants expire automatically after seven days."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 8,
+          "text": "Only the document owner may grant access to a shared file."
+        }
+      ]
+    },
+    {
+      "id": "en-upload-retry",
+      "category": "en_paraphrase",
+      "question": "How many times can the uploader retry before giving up?",
+      "relevant": [
+        {
+          "page_index": 10,
+          "text": "The retry limit for uploads is three attempts."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 10,
+          "text": "Upload retries use exponential backoff with a two-second base."
+        },
+        {
+          "page_index": 10,
+          "text": "Download retries are unlimited in the desktop client."
+        }
+      ]
+    },
+    {
+      "id": "en-alert-queue",
+      "category": "en_paraphrase",
+      "question": "What condition causes operators to be alerted?",
+      "relevant": [
+        {
+          "page_index": 12,
+          "text": "Operators receive alerts when the queue depth exceeds one hundred jobs."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 12,
+          "text": "Operators rotate the alert routing list every quarter."
+        },
+        {
+          "page_index": 5,
+          "text": "A cache hit rate below fifty percent triggers an alert."
+        }
+      ]
+    },
+    {
+      "id": "cross-page-access-record",
+      "category": "cross_page",
+      "question": "How is access to a shared file granted and recorded?",
+      "relevant": [
+        {
+          "page_index": 8,
+          "text": "Only the document owner may grant access to a shared file."
+        },
+        {
+          "page_index": 9,
+          "text": "The audit log records every access grant change."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 8,
+          "text": "Access grants expire automatically after seven days."
+        },
+        {
+          "page_index": 9,
+          "text": "Each audit entry includes the actor and the timestamp."
+        },
+        {
+          "page_index": 9,
+          "text": "Audit entries are retained for one year."
+        }
+      ]
+    },
+    {
+      "id": "cross-page-upload-limits",
+      "category": "cross_page",
+      "question": "What limits apply to uploads and PDF files?",
+      "relevant": [
+        {
+          "page_index": 10,
+          "text": "The retry limit for uploads is three attempts."
+        },
+        {
+          "page_index": 11,
+          "text": "The maximum file size for a single upload is twenty megabytes."
+        },
+        {
+          "page_index": 11,
+          "text": "The maximum number of pages in a PDF is five hundred."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 10,
+          "text": "Upload retries use exponential backoff with a two-second base."
+        },
+        {
+          "page_index": 10,
+          "text": "Download retries are unlimited in the desktop client."
+        },
+        {
+          "page_index": 11,
+          "text": "PDF previews are limited to the first ten pages."
+        }
+      ]
+    },
+    {
+      "id": "cross-page-deletion-lifecycle",
+      "category": "cross_page",
+      "question": "What happens to uploads and personal exports after deletion?",
+      "relevant": [
+        {
+          "page_index": 6,
+          "text": "User uploads are retained for thirty days after deletion."
+        },
+        {
+          "page_index": 6,
+          "text": "Backup copies of deleted uploads are kept for ninety days."
+        },
+        {
+          "page_index": 7,
+          "text": "Personal exports are deleted immediately after download."
+        },
+        {
+          "page_index": 7,
+          "text": "Deleted personal exports are never kept in backups."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 9,
+          "text": "Audit entries are retained for one year."
+        }
+      ]
+    },
+    {
+      "id": "partial-upload-retry",
+      "category": "partial_candidates",
+      "question": "What retry rules apply to uploads?",
+      "relevant": [
+        {
+          "page_index": 10,
+          "text": "The retry limit for uploads is three attempts."
+        },
+        {
+          "page_index": 10,
+          "text": "Upload retries use exponential backoff with a two-second base."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 10,
+          "text": "Download retries are unlimited in the desktop client."
+        },
+        {
+          "page_index": 11,
+          "text": "The maximum file size for a single upload is twenty megabytes."
+        }
+      ]
+    },
+    {
+      "id": "partial-deleted-uploads-backups",
+      "category": "partial_candidates",
+      "question": "How are deleted uploads handled in backups?",
+      "relevant": [
+        {
+          "page_index": 6,
+          "text": "Backup copies of deleted uploads are kept for ninety days."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 6,
+          "text": "User uploads are retained for thirty days after deletion."
+        },
+        {
+          "page_index": 7,
+          "text": "Deleted personal exports are never kept in backups."
+        }
+      ]
+    },
+    {
+      "id": "partial-cache-purge",
+      "category": "partial_candidates",
+      "question": "What happens after a cache purge?",
+      "relevant": [
+        {
+          "page_index": 4,
+          "text": "Cached pages are never served after a purge."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 4,
+          "text": "The cache is purged every night at two in the morning."
+        },
+        {
+          "page_index": 5,
+          "text": "The cache policy for the demo environment is still undecided."
+        },
+        {
+          "page_index": 5,
+          "text": "A cache hit rate below fifty percent triggers an alert."
+        }
+      ]
+    },
+    {
+      "id": "keyword-cache-cleaned",
+      "category": "keyword_distractor",
+      "question": "When is the cache cleaned?",
+      "relevant": [
+        {
+          "page_index": 4,
+          "text": "The cache is purged every night at two in the morning."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 4,
+          "text": "Cached pages are never served after a purge."
+        },
+        {
+          "page_index": 5,
+          "text": "The cache policy for the demo environment is still undecided."
+        },
+        {
+          "page_index": 5,
+          "text": "A cache hit rate below fifty percent triggers an alert."
+        }
+      ]
+    },
+    {
+      "id": "keyword-login-method",
+      "category": "keyword_distractor",
+      "question": "Can users sign in with a password?",
+      "relevant": [
+        {
+          "page_index": 13,
+          "text": "The service does not support password-based login."
+        },
+        {
+          "page_index": 13,
+          "text": "Authentication requires a hardware security key."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 8,
+          "text": "Only the document owner may grant access to a shared file."
+        },
+        {
+          "page_index": 8,
+          "text": "Access grants expire automatically after seven days."
+        }
+      ]
+    },
+    {
+      "id": "keyword-weather-retention",
+      "category": "keyword_distractor",
+      "question": "Does seasonal weather change the retention schedule?",
+      "relevant": [
+        {
+          "page_index": 14,
+          "text": "Seasonal weather does not affect the retention schedule."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 14,
+          "text": "The weather service publishes a forecast every morning."
+        },
+        {
+          "page_index": 6,
+          "text": "User uploads are retained for thirty days after deletion."
+        },
+        {
+          "page_index": 6,
+          "text": "Backup copies of deleted uploads are kept for ninety days."
+        }
+      ]
+    },
+    {
+      "id": "diff-conclusion-export-backup",
+      "category": "different_conclusion",
+      "question": "Are deleted personal exports kept in backups?",
+      "relevant": [
+        {
+          "page_index": 7,
+          "text": "Deleted personal exports are never kept in backups."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 6,
+          "text": "Backup copies of deleted uploads are kept for ninety days."
+        },
+        {
+          "page_index": 7,
+          "text": "Personal exports are deleted immediately after download."
+        }
+      ]
+    },
+    {
+      "id": "diff-conclusion-upload-retention",
+      "category": "different_conclusion",
+      "question": "How long are deleted uploads retained?",
+      "relevant": [
+        {
+          "page_index": 6,
+          "text": "User uploads are retained for thirty days after deletion."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 6,
+          "text": "Backup copies of deleted uploads are kept for ninety days."
+        },
+        {
+          "page_index": 9,
+          "text": "Audit entries are retained for one year."
+        },
+        {
+          "page_index": 14,
+          "text": "Seasonal weather does not affect the retention schedule."
+        }
+      ]
+    },
+    {
+      "id": "recall-vs-top1-pdf-pages",
+      "category": "recall_vs_top1",
+      "question": "What is the maximum number of pages allowed in a PDF?",
+      "relevant": [
+        {
+          "page_index": 11,
+          "text": "The maximum number of pages in a PDF is five hundred."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 11,
+          "text": "PDF previews are limited to the first ten pages."
+        },
+        {
+          "page_index": 11,
+          "text": "The maximum file size for a single upload is twenty megabytes."
+        },
+        {
+          "page_index": 10,
+          "text": "The retry limit for uploads is three attempts."
+        }
+      ]
+    },
+    {
+      "id": "recall-vs-top1-audit-entry",
+      "category": "recall_vs_top1",
+      "question": "What information does each audit entry contain?",
+      "relevant": [
+        {
+          "page_index": 9,
+          "text": "Each audit entry includes the actor and the timestamp."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 9,
+          "text": "The audit log records every access grant change."
+        },
+        {
+          "page_index": 9,
+          "text": "Audit entries are retained for one year."
+        }
+      ]
+    },
+    {
+      "id": "recall-vs-top1-access-grant",
+      "category": "recall_vs_top1",
+      "question": "Who is allowed to grant access to a shared file?",
+      "relevant": [
+        {
+          "page_index": 8,
+          "text": "Only the document owner may grant access to a shared file."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 8,
+          "text": "Access grants expire automatically after seven days."
+        },
+        {
+          "page_index": 9,
+          "text": "The audit log records every access grant change."
+        }
+      ]
+    },
+    {
+      "id": "recall-vs-top1-upload-attempts",
+      "category": "recall_vs_top1",
+      "question": "How many attempts are permitted for uploads?",
+      "relevant": [
+        {
+          "page_index": 10,
+          "text": "The retry limit for uploads is three attempts."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 10,
+          "text": "Upload retries use exponential backoff with a two-second base."
+        },
+        {
+          "page_index": 10,
+          "text": "Download retries are unlimited in the desktop client."
+        },
+        {
+          "page_index": 11,
+          "text": "The maximum file size for a single upload is twenty megabytes."
+        }
+      ]
+    },
+    {
+      "id": "recall-vs-top1-cache-night",
+      "category": "recall_vs_top1",
+      "question": "What happens to cached pages every night?",
+      "relevant": [
+        {
+          "page_index": 4,
+          "text": "The cache is purged every night at two in the morning."
+        },
+        {
+          "page_index": 4,
+          "text": "Cached pages are never served after a purge."
+        }
+      ],
+      "irrelevant": [
+        {
+          "page_index": 5,
+          "text": "A cache hit rate below fifty percent triggers an alert."
+        },
+        {
+          "page_index": 14,
+          "text": "The weather service publishes a forecast every morning."
+        }
+      ]
+    },
+    {
+      "id": "unans-cache-size",
+      "category": "unanswerable",
+      "question": "How large is the cache in gigabytes?",
+      "relevant": [],
+      "irrelevant": [
+        {
+          "page_index": 4,
+          "text": "The cache is purged every night at two in the morning."
+        },
+        {
+          "page_index": 5,
+          "text": "A cache hit rate below fifty percent triggers an alert."
+        }
+      ]
+    },
+    {
+      "id": "unans-backup-restore",
+      "category": "unanswerable",
+      "question": "How often are backups tested for restore?",
+      "relevant": [],
+      "irrelevant": [
+        {
+          "page_index": 6,
+          "text": "Backup copies of deleted uploads are kept for ninety days."
+        }
+      ]
+    },
+    {
+      "id": "unans-photo-algorithm",
+      "category": "unanswerable",
+      "question": "Which encryption algorithm protects photos?",
+      "relevant": [],
+      "irrelevant": [
+        {
+          "page_index": 1,
+          "text": "Photos are encrypted before upload and stored with a random identifier."
+        }
+      ]
+    },
+    {
+      "id": "unans-queue-throughput",
+      "category": "unanswerable",
+      "question": "How many jobs are processed each hour?",
+      "relevant": [],
+      "irrelevant": [
+        {
+          "page_index": 12,
+          "text": "Operators receive alerts when the queue depth exceeds one hundred jobs."
+        }
+      ]
+    },
+    {
+      "id": "unans-retention-approver",
+      "category": "unanswerable",
+      "question": "Who approves changes to the retention schedule?",
+      "relevant": [],
+      "irrelevant": [
+        {
+          "page_index": 6,
+          "text": "User uploads are retained for thirty days after deletion."
+        },
+        {
+          "page_index": 14,
+          "text": "Seasonal weather does not affect the retention schedule."
+        }
+      ]
+    },
+    {
+      "id": "unans-cloud-provider",
+      "category": "unanswerable",
+      "question": "Which cloud provider hosts the service?",
+      "relevant": [],
+      "irrelevant": []
+    },
+    {
+      "id": "unans-budget",
+      "category": "unanswerable",
+      "question": "What is the project's annual budget?",
+      "relevant": [],
+      "irrelevant": []
+    },
+    {
+      "id": "unans-support-email",
+      "category": "unanswerable",
+      "question": "What is the support email address?",
+      "relevant": [],
+      "irrelevant": []
+    },
+    {
+      "id": "unans-mobile-offline",
+      "category": "unanswerable",
+      "question": "Does the mobile app work offline?",
+      "relevant": [],
+      "irrelevant": []
+    },
+    {
+      "id": "unans-audit-review",
+      "category": "unanswerable",
+      "question": "How many audit entries are reviewed each week?",
+      "relevant": [],
+      "irrelevant": [
+        {
+          "page_index": 9,
+          "text": "The audit log records every access grant change."
+        },
+        {
+          "page_index": 9,
+          "text": "Audit entries are retained for one year."
+        }
+      ]
+    },
+    {
+      "id": "unans-key-battery",
+      "category": "unanswerable",
+      "question": "How long does the hardware security key battery last?",
+      "relevant": [],
+      "irrelevant": [
+        {
+          "page_index": 13,
+          "text": "Authentication requires a hardware security key."
         }
       ]
     }
