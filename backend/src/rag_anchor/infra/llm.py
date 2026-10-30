@@ -236,6 +236,8 @@ class OpenAICompatibleLLMProvider:
             ],
             "temperature": 0,
             "max_tokens": self._max_output_tokens,
+            # The generation contract is one JSON object; constrain decoding to it.
+            "response_format": {"type": "json_object"},
         }
         if self._reasoning_effort:
             payload["reasoning_effort"] = self._reasoning_effort

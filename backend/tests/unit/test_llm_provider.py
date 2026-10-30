@@ -108,6 +108,7 @@ def test_provider_sends_expected_request_and_returns_content() -> None:
     assert payload["model"] == "qwen-test"
     assert payload["temperature"] == 0
     assert payload["max_tokens"] == 321
+    assert payload["response_format"] == {"type": "json_object"}
     assert "reasoning_effort" not in payload
     assert payload["messages"] == [
         {"role": "system", "content": "system instructions"},
