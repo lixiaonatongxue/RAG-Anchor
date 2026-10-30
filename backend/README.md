@@ -240,8 +240,9 @@ Content-Type: application/json
 - 语义候选同样来自存储的页面文本，引用字段由服务端按 `page_text[start:end] == source_text` 校验后重建；`support_kind = "semantic_candidate"`，并附带 `retrieval_kind = "semantic"` 与 `score`，与字面命中的 `retrieval_match` / `sentence` 明确区分。
 - 无命中时返回 HTTP 200、`status = "insufficient_evidence"`、`citations = []`，且不调用模型。
 - 证据展示模式返回 `status = "evidence_found"` 与服务端固定说明。
-- 生成模式把服务端证据（`E1`、`E2`…）交给模型；模型只能返回 `answer` 与 `citation_ids`。未知编号、非法 JSON、超长或空回答会被拒绝；引用字段全部按服务端记录重建。
-- 模型返回空 `citation_ids` 时丢弃其文本，返回 `insufficient_evidence`。
+- 生成模式把服务端证据（`E1`、`E2`…）交给模型；模型只需返回 `answerable`、`claims`（每条实质性陈述绑定 `citation_ids`）和 `limitations`（证据未覆盖的问题部分）。最终回答由服务端从 `claims` 组装，只有被 `claims` 实际引用的证据才会成为返回引用；模型不得提供页码、偏移、Chunk ID 或 PDF 几何。未使用证据由服务端按“提供候选 ID − claim 引用 ID”机械计算并记录为内部审计，不要求模型枚举；模型仍输出的旧 `unused_evidence` 字段会被完全忽略，不能作为事实支持或完整性的证明。模型请求使用 OpenAI 兼容的 `response_format = {"type": "json_object"}` 约束解码为单个 JSON 对象；这只约束输出语法，字段结构与证据记账仍由服务端独立校验。
+- `answerable = false` 的拒答必须没有 `claims`；服务端丢弃拒答中的自由文本、遗留辅助字段与 `limitations`（不校验其结构），返回固定拒答。回答路径上的未知编号、非法 JSON、缺失 `answerable`/`claims`、空 claim、空 `citation_ids`、以及 `answerable = false` 却带 `claims` 等不一致结构一律按 502 处理。
+- 结构校验只证明“陈述关联到本次检索到的真实证据编号与原文切片”，**不证明**事实蕴含、对象绑定或回答完整性。
 - 引用不包含 PDF 几何；点击引用需调用 `POST /evidence/locate`。
 - 每个引用包含 `support_text` / `support_start` / `support_end` / `support_kind`：优先定位命中所在的完整句子（`sentence`）；跨行、句子边界不清或 Chunk 边界截断时回退为关键词命中（`retrieval_match`）。两种区间都是存储页面文本的精确切片，并位于同一 Chunk 内；句子切分只是标点启发式，不代表事实已被证明。
 - 错误语义：404 文档不存在；409 未索引；422 请求非法；503 生成模式未启用/未配置；504 模型超时；502 模型服务失败或响应无法校验。
@@ -283,7 +284,15 @@ Content-Type: application/json
 
 引用校验只保证回答关联到真实检索证据，不保证回答内容正确。已使用本机 Ollama `qwen3:8b`（OpenAI 兼容端点）完成少量真实联调；Qwen3 默认 thinking 会占用输出 token，联调时设置 `RAG_ANCHOR_LLM_REASONING_EFFORT=none`。自动化测试仍只使用 Fake/Mock Provider。
 
-语义检索的真实 embedding 调用与真实召回率评测**未执行**：本机 `ollama list` 仅有 `qwen3:8b`，没有 `bge-m3`，本轮未下载模型。离线测试与 `scripts/evaluate_semantic_retrieval.py --provider fake` 只验证工程管线（候选切分、偏移校验、归一化、排序、引用定位），数值不代表语义检索质量。安装授权模型后可运行：
+固定评测集 `backend/evaluation/semantic_dataset.json` 已扩充为 v2.1：42 条问题，其中 29 条可回答、13 条不可回答，覆盖中文问题召回英文证据、英文改写、跨页证据、部分相关候选、同关键词干扰、相似主题不同结论、不可回答、Recall@5 与 Top-1 分歧 8 类。所有相关句标签都在运行 embedding 前按存储原文固定；不可回答问题不进入 Recall@K 分母，并单独统计候选误召回与 QA 声称存在证据的比例。
+
+扩充后的 v2.1 已完成一次固定合成数据集的真实 grounded_generation 回归：bge-m3 的 Semantic Recall@5 为 1.0、Top-1 为 0.8276（5 条 Top-1 排序错误），相关句 span recall@5 为 0.975、全部相关句命中率为 0.9655；qwen3:8b 对 29 条可回答问题中 28 条生成带引用答案、误拒答 1/29，对 13/13 不可回答问题均返回固定拒答（误答 0/13、引用 0 条），本轮回归 HTTP 502 为 0/42。46 条引用全部通过引用 ID、原文重建和 PDF 定位检查，其中 34 条落在标注相关句、12 条落在标注相关句之外；但引用合法不等于事实支持：自动辅助逐条审查认为 19/29 条答案严格干净，7/29 条超出问题范围，2/29 条不完整。上述结果来自一次固定合成数据集的真实模型回归，不是生产质量保证，也不是人工事实认证。
+
+M2-01.1 已加强生成提示词（对象/数量/时间绑定、操作结果与执行时间区分、多条件逐项核对、不增加未要求结论、只引用直接支持答案的证据）。当前生成契约是 `answerable` + `claims` + `limitations`：旧的 `answer`/`citation_ids` 两字段输出（包括空 `answer` + 空 `citation_ids`）不再被接受；缺失 `answerable`/`claims`、空 `claims` 或 `answerable = true` 却无有效引用等结构按 502 处理，标准拒答为 `answerable = false` 且 `claims = []`。离线比较 Top-5 与 Top-10：Top-10 只多召回 1 条相关句（`cross-page-upload-limits` 的 500 页句，rank 7），同时新增 149 条非相关候选，因此未修改生产候选数 5 或默认阈值 0.30。真实浏览器验收**未执行**。离线 `--provider fake` 只验证工程管线（候选切分、偏移校验、归一化、排序、引用定位），数值不代表语义检索质量。脚本基于每条问题的一次低阈值检索离线扫描 0.30–0.70 阈值，不额外调用 embedding；QA 与引用仍使用配置的默认阈值。
+
+M2-01.1 起，生成输出使用 `answerable` + `claims` + `limitations` 契约：服务端从 `claims` 组装回答，未知引用、拒答带 claims、空声明等不一致结构仍被拒绝；未使用证据改由服务端机械计算并记录为内部审计，不再因模型遗漏无关候选的记账字段而返回 502。旧的两字段 `answer`/`citation_ids` 输出不再被接受；旧的 `unused_evidence` 字段即使出现也会被忽略。明确的拒答（`answerable=false` 且 `claims=[]`）不展示任何模型文本或引用，其辅助字段被丢弃，不因结构异常而返回 502。该契约仍只提供结构性证据关联，不验证事实蕴含、对象绑定或完整性。
+
+已知限制：`keyword-login-method` 仍可能被误拒答；`cross-page-upload-limits` 的 500 页证据仍在当前 Top-5 之外；部分答案仍不完整或超出问题范围；浏览器场景 A–G 尚未实际验收；M2-02 尚未开始。结构合法与引用可定位均不等于事实正确或引用支持答案。
 
 ```bash
 RAG_ANCHOR_EMBEDDING_ENABLED=1 \

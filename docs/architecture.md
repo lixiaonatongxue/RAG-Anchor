@@ -295,21 +295,30 @@ POST /api/v1/documents/{document_id}/qa
 1. 完成同样的字面检索并构造服务端引用。
 2. 若没有证据，直接返回 `insufficient_evidence`，不调用模型。
 3. 将问题与服务端证据发送给可注入的 `LLMProvider`（默认实现为 OpenAI 兼容 `/chat/completions`）。
-4. 系统提示词与用户内容分离：`system` 只包含固定规则；`user` 是 JSON，包含 `question` 与 `evidence`（`id`、`page_number`、`text`）。PDF 文本被明确标记为不可信外部数据，其中的指令不得被执行。
-5. 模型只允许返回：
+4. 系统提示词与用户内容分离：`system` 只包含固定规则；`user` 是 JSON，包含 `question` 与 `evidence`（`id`、`page_number`、`text`）。PDF 文本被明确标记为不可信外部数据，其中的指令不得被执行。模型请求使用 OpenAI 兼容的 `response_format = {"type": "json_object"}`，把解码约束为单个 JSON 对象；该约束不替代服务端 schema 与证据记账校验。
+5. 模型必须返回显式回答结构：
 
 ```json
 {
-  "answer": "面向问题的自然语言回答。",
-  "citation_ids": ["E1", "E2"]
+  "answerable": true,
+  "claims": [
+    {"text": "一条实质性陈述。", "citation_ids": ["E1"]}
+  ],
+  "limitations": ["证据未覆盖的问题部分。"]
 }
 ```
 
-6. 服务端拒绝未知/非法引用编号、非 JSON 输出、缺少 `answer`、超长回答等；引用按服务端记录重建，模型提供的页码、偏移、Chunk ID、文档 ID 或几何字段一律忽略。
-7. 若模型返回空 `citation_ids`，丢弃其文本并返回固定拒答，避免展示无证据支持的结论。
-8. 成功时 `status = "answered"`；引用只包含模型实际选择且通过校验的服务端证据。
+拒答必须使用：
 
-引用校验只保证“回答关联到本次检索到的真实证据”，**不保证回答中的每个事实正确**；提示词也无法消除幻觉，前端会明确提示需要人工核对。
+```json
+{"answerable": false, "claims": []}
+```
+
+6. 服务端从 `claims` 的 `text` 组装最终 `answer`；`limitations` 以服务端固定前缀“证据未覆盖:”附加。返回引用只包含被至少一条 claim 引用的证据，顺序按 claim 首次出现；模型提供的页码、偏移、Chunk ID、文档 ID 或几何字段一律忽略。未使用证据由服务端机械计算：`提供的候选 ID 集合 − claims 引用的 ID 集合`，只作为内部审计信息，不返回给前端。模型不再需要枚举未使用证据；若仍输出旧 `unused_evidence` 字段，服务端完全忽略，不将其作为事实支持、相关性或完整性的证明。
+7. 服务端拒绝回答路径上的未知/非法引用编号、非 JSON 输出、缺失 `answerable`/`claims`、空 claim、空 `citation_ids`、超长回答等。`answerable = false` 时 `claims` 必须为空；拒答中的自由文本、遗留辅助字段（包括 `limitations`）均被丢弃且不校验结构，返回固定拒答。
+8. 成功时 `status = "answered"`。结构校验只证明“每条展示陈述关联到本次检索到的真实证据”，**不证明事实蕴含、对象绑定、相关性或回答完整性**；`answerable = true` 是模型声明，不是正确性证明。服务端计算 unused evidence 只是集合差，同样不证明回答完整或事实正确。
+
+引用与 claim 校验只保证结构关联和原文切片重建，不保证回答中的每个事实正确；提示词也无法消除幻觉，前端会明确提示需要人工核对。
 
 **错误语义**
 
@@ -377,7 +386,14 @@ POST /api/v1/documents/{document_id}/qa
 
 **已知限制**
 
-- 本机仅有 `qwen3:8b`，没有 `bge-m3`；本轮未下载模型，真实 embedding 调用与真实召回率评测**未执行**。
+- 已用 `bge-m3:latest`（digest `7907646426070047…`）与 `qwen3:8b` 完成 v2.1 真实 grounded_generation 回归（一次固定合成数据集回归，不是生产质量保证）：42 条问题（29 可回答 + 13 不可回答），Semantic Recall@5 为 1.0、Top-1 为 0.8276（5 条 Top-1 排序错误），相关句 span recall@5 为 0.975、全部相关句命中率为 0.9655；28/29 可回答问题生成带引用答案、误拒答 1/29，13/13 不可回答问题固定拒答（0 条误答、0 条引用），本轮 HTTP 502 为 0/42；46 条引用全部通过 ID、原文重建和 PDF 定位检查（34 条落在标注相关句、12 条之外）。0.30 只作为当前评测配置，不是已验证的最佳阈值。
+- 引用合法仍是来源校验，不是事实校验：自动辅助逐条审查认为 19/29 条答案严格干净，7/29 条超出问题范围，2/29 条不完整。该判断只针对 42 条合成数据，不是人工事实认证，真实浏览器验收也未执行。
+- M2-01.1 加强了提示词：要求保持对象/数量/时间/否定/条件绑定，区分操作结果与执行时间，多条件逐项核对，不增加未要求结论，只引用直接支持答案的证据。生成契约改为 `answerable` + `claims` + `limitations`；旧的 `answer`/`citation_ids` 两字段输出（包括空 `answer` + 空 `citation_ids`）不再被接受，缺失 `answerable`/`claims`、空 `claims` 或 `answerable = true` 却无有效引用等结构按 502 处理，标准拒答为 `answerable = false` 且 `claims = []`。服务端仍不校验回答与引用之间的事实蕴含关系。
+- M2-01.1 起生成输出采用 `answerable` + `claims`（每条含 `text` 与 `citation_ids`）+ `limitations` 契约：服务端从 claims 组装回答；未使用证据由服务端用“提供候选 ID − claim 引用 ID”机械计算并记录为内部审计，模型不再枚举 `unused_evidence`。旧 `unused_evidence` 字段若仍出现会被完全忽略，不作为事实支持、相关性或完整性的证明。明确拒答（`answerable=false`、`claims=[]`）丢弃所有辅助字段且不校验其结构；拒答带 claims、引用未知 ID、空 claim、非法 JSON 等仍按 502 拒绝。结构校验仍不验证 claim 与证据的事实蕴含、对象绑定或完整性；旧 `answer`/`citation_ids` 输出按 502 拒绝。
+- 离线比较 Top-5 与 Top-10：Top-10 只多召回 1 条相关句（`cross-page-upload-limits` 的 500 页句，rank 7），同时新增 149 条非相关候选；因此生产候选数仍为 5，阈值仍为 0.30。
+- 已知限制：`keyword-login-method` 仍可能被误拒答；`cross-page-upload-limits` 的 500 页证据仍在当前 Top-5 之外；部分答案仍不完整或超出问题范围；浏览器场景 A–G 尚未实际验收；M2-02 尚未开始。结构合法与引用可定位均不等于事实正确或引用支持答案。
+- 固定评测集要求至少 30 条问题、至少 10 条不可回答，并覆盖中文问题召回英文证据、英文改写、跨页证据、部分相关候选、同关键词干扰、相似主题不同结论、不可回答、Recall@5 与 Top-1 分歧。标签先于 embedding 固定；不可回答问题不进入 Recall@K 分母。
+- 阈值扫描复用每条问题一次低阈值检索的分数，离线过滤得到 0.30–0.70 的指标，不额外调用 embedding；QA 和引用仍使用配置的默认阈值。
 - `--provider fake` 使用确定性关键词向量，只证明工程管线可运行，不能代表真实语义检索质量。
 - 暴力余弦排序适用于单文档、中小规模候选；不引入向量数据库或 ANN 索引。
 
