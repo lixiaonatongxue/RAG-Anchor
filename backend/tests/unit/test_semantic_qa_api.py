@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from semantic_fakes import (
     VECTOR_DIMENSION,
     FakeEmbeddingProvider,
+    VectorMapEmbeddingProvider,
     fake_identity,
     keyword_vector,
 )
@@ -63,6 +64,38 @@ class RecordingLLMProvider:
         if isinstance(self.output, Exception):
             raise self.output
         return self.output
+
+
+@dataclass
+class StructuredRecordingLLMProvider:
+    """Emit the claim envelope while accounting for every supplied evidence id."""
+
+    claims: list[tuple[str, list[str]]]
+    limitations: list[str] = field(default_factory=list)
+    calls: list[list[LLMMessage]] = field(default_factory=list)
+
+    def complete(self, messages) -> str:
+        self.calls.append(list(messages))
+        payload = json.loads(messages[-1].content)
+        evidence_ids = [item["id"] for item in payload["evidence"]]
+        used = {citation_id for _, ids in self.claims for citation_id in ids}
+        assert used <= set(evidence_ids)
+        unused = [citation_id for citation_id in evidence_ids if citation_id not in used]
+        return json.dumps(
+            {
+                "answerable": True,
+                "claims": [
+                    {"text": text, "citation_ids": citation_ids}
+                    for text, citation_ids in self.claims
+                ],
+                "unused_evidence": [
+                    {"citation_id": citation_id, "reason": "fixture: not used"}
+                    for citation_id in unused
+                ],
+                "limitations": self.limitations,
+            },
+            ensure_ascii=False,
+        )
 
 
 @dataclass
@@ -286,7 +319,7 @@ def test_semantic_question_finds_english_evidence_for_a_chinese_question(
     api_factory,
     semantic_pdf: Path,
 ) -> None:
-    fake_llm = RecordingLLMProvider('{"answer": "unused", "citation_ids": ["E1"]}')
+    fake_llm = StructuredRecordingLLMProvider([("unused", ["E1"])])
     api = api_factory(
         embedding_provider=FakeEmbeddingProvider(),
         llm_provider=fake_llm,
@@ -483,9 +516,7 @@ def test_semantic_grounded_generation_sends_the_ranked_candidate(
     api_factory,
     semantic_pdf: Path,
 ) -> None:
-    fake_llm = RecordingLLMProvider(
-        json.dumps({"answer": "项目分为三个阶段。", "citation_ids": ["E1"]}, ensure_ascii=False)
-    )
+    fake_llm = StructuredRecordingLLMProvider([("项目分为三个阶段。", ["E1"])])
     api = api_factory(
         embedding_provider=FakeEmbeddingProvider(),
         llm_provider=fake_llm,
@@ -519,11 +550,207 @@ def test_semantic_grounded_generation_sends_the_ranked_candidate(
     assert body["citations"][0]["support_text"] != body["citations"][0]["chunk_text"]
 
 
+def _scripted_vectors(
+    ranked_texts: list[str],
+    query: str,
+) -> dict[str, list[float]]:
+    """Map texts to vectors whose cosine similarity follows the requested order."""
+    vectors: dict[str, list[float]] = {}
+    for index, text in enumerate(ranked_texts):
+        vector = [0.0] * VECTOR_DIMENSION
+        vector[0] = 1.0
+        if index:
+            vector[index] = 0.5 * index
+        vectors[text] = vector
+    vectors[query] = [1.0] + [0.0] * (VECTOR_DIMENSION - 1)
+    return vectors
+
+
+def test_generation_payload_keeps_similar_retention_facts_separate(
+    api_factory,
+    pdf_factory,
+) -> None:
+    upload_retention = "User uploads are retained for thirty days after deletion."
+    backup_retention = "Backup copies of deleted uploads are kept for ninety days."
+    question = "How long are deleted uploads retained?"
+    path = pdf_factory(
+        "retention.pdf",
+        [[(100.0, 300.0, upload_retention), (100.0, 240.0, backup_retention)]],
+    )
+    provider = VectorMapEmbeddingProvider(
+        _scripted_vectors([upload_retention, backup_retention], question)
+    )
+    fake_llm = StructuredRecordingLLMProvider([("已删除的上传保留三十天。", ["E1"])])
+    api = api_factory(embedding_provider=provider, llm_provider=fake_llm)
+    document_id = _ready(api, path)
+
+    response = _ask(
+        api.client,
+        document_id,
+        {
+            "question": question,
+            "retrieval_mode": "semantic",
+            "answer_mode": "grounded_generation",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = json.loads(fake_llm.calls[0][-1].content)
+    evidence = payload["evidence"]
+    assert [item["id"] for item in evidence] == ["E1", "E2"]
+    assert [item["text"] for item in evidence] == [upload_retention, backup_retention]
+    assert [item["page_number"] for item in evidence] == [1, 1]
+    assert all(set(item) == {"id", "page_number", "text"} for item in evidence)
+    assert '"answerable": true, "claims"' in fake_llm.calls[0][0].content
+    assert "unused_evidence" not in fake_llm.calls[0][0].content
+    assert "not state how long deleted uploads themselves are kept" in (
+        fake_llm.calls[0][0].content
+    )
+
+    body = response.json()
+    assert body["status"] == "answered"
+    assert [citation["citation_id"] for citation in body["citations"]] == ["E1"]
+    assert body["citations"][0]["support_text"] == upload_retention
+
+
+def test_generation_payload_keeps_purge_result_and_purge_schedule_separate(
+    api_factory,
+    pdf_factory,
+) -> None:
+    purge_result = "Cached pages are never served after a purge."
+    purge_schedule = "The cache is purged every night at two in the morning."
+    question = "When is the cache purged?"
+    path = pdf_factory(
+        "cache.pdf",
+        [[(100.0, 300.0, purge_result), (100.0, 240.0, purge_schedule)]],
+    )
+    provider = VectorMapEmbeddingProvider(
+        _scripted_vectors([purge_schedule, purge_result], question)
+    )
+    fake_llm = StructuredRecordingLLMProvider([(purge_schedule, ["E1"])])
+    api = api_factory(embedding_provider=provider, llm_provider=fake_llm)
+    document_id = _ready(api, path)
+
+    response = _ask(
+        api.client,
+        document_id,
+        {
+            "question": question,
+            "retrieval_mode": "semantic",
+            "answer_mode": "grounded_generation",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = json.loads(fake_llm.calls[0][-1].content)
+    assert [item["text"] for item in payload["evidence"]] == [
+        purge_schedule,
+        purge_result,
+    ]
+    assert "does not state when the purge happens" in fake_llm.calls[0][0].content
+    body = response.json()
+    assert [citation["citation_id"] for citation in body["citations"]] == ["E1"]
+    assert body["citations"][0]["support_text"] == purge_schedule
+
+
+def test_generation_payload_keeps_each_audit_fact_as_its_own_candidate(
+    api_factory,
+    pdf_factory,
+) -> None:
+    audit_content = "Each audit entry includes the actor and the timestamp."
+    audit_log = "The audit log records every access grant change."
+    audit_retention = "Audit entries are retained for one year."
+    question = "What information does each audit entry contain?"
+    path = pdf_factory(
+        "audit.pdf",
+        [
+            [
+                (100.0, 300.0, audit_content),
+                (100.0, 240.0, audit_log),
+                (100.0, 180.0, audit_retention),
+            ]
+        ],
+    )
+    provider = VectorMapEmbeddingProvider(
+        _scripted_vectors([audit_content, audit_log, audit_retention], question)
+    )
+    fake_llm = StructuredRecordingLLMProvider([("审计条目包含操作者和时间戳。", ["E1"])])
+    api = api_factory(embedding_provider=provider, llm_provider=fake_llm)
+    document_id = _ready(api, path)
+
+    response = _ask(
+        api.client,
+        document_id,
+        {
+            "question": question,
+            "retrieval_mode": "semantic",
+            "answer_mode": "grounded_generation",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = json.loads(fake_llm.calls[0][-1].content)
+    assert [item["text"] for item in payload["evidence"]] == [
+        audit_content,
+        audit_log,
+        audit_retention,
+    ]
+    assert len({item["id"] for item in payload["evidence"]}) == 3
+    body = response.json()
+    assert [citation["citation_id"] for citation in body["citations"]] == ["E1"]
+    assert body["citations"][0]["support_text"] == audit_content
+
+
+def test_citation_validation_does_not_prove_factual_binding(
+    api_factory,
+    pdf_factory,
+) -> None:
+    """Pin the enforcement boundary: claim links and spans are checked, meaning is not.
+
+    The server can reject unknown ids, require every claim to carry at least one
+    evidence link, and reconstruct exact page slices. It has no semantic
+    verifier for whether the claim actually follows from, or even concerns, the
+    cited sentence. This test documents that limitation instead of implying a
+    guarantee the code does not provide.
+    """
+    upload_retention = "User uploads are retained for thirty days after deletion."
+    backup_retention = "Backup copies of deleted uploads are kept for ninety days."
+    question = "How long are deleted uploads retained?"
+    path = pdf_factory(
+        "binding.pdf",
+        [[(100.0, 300.0, upload_retention), (100.0, 240.0, backup_retention)]],
+    )
+    provider = VectorMapEmbeddingProvider(
+        _scripted_vectors([backup_retention, upload_retention], question)
+    )
+    fake_llm = StructuredRecordingLLMProvider(
+        [("Deleted uploads are retained for ninety days.", ["E1"])]
+    )
+    api = api_factory(embedding_provider=provider, llm_provider=fake_llm)
+    document_id = _ready(api, path)
+
+    response = _ask(
+        api.client,
+        document_id,
+        {
+            "question": question,
+            "retrieval_mode": "semantic",
+            "answer_mode": "grounded_generation",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "answered"
+    assert [citation["citation_id"] for citation in body["citations"]] == ["E1"]
+    assert body["citations"][0]["support_text"] == backup_retention
+
+
 def test_semantic_grounded_no_evidence_does_not_call_the_model(
     api_factory,
     semantic_pdf: Path,
 ) -> None:
-    fake_llm = RecordingLLMProvider('{"answer": "forged", "citation_ids": ["E1"]}')
+    fake_llm = StructuredRecordingLLMProvider([("forged", ["E1"])])
     api = api_factory(
         embedding_provider=FakeEmbeddingProvider(),
         llm_provider=fake_llm,

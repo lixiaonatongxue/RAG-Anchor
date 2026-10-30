@@ -3,6 +3,10 @@
 No test opens a network connection: the application is built with an injected
 fake provider, and retrieval still reads the same persisted chunk rows as
 production. Mock output is never presented as a real model result.
+
+These tests verify the server contract only. A structurally valid claim link
+does not prove that the claim is relevant to the question or entailed by the
+cited evidence; the real regression measures that separately.
 """
 
 from __future__ import annotations
@@ -45,6 +49,35 @@ class FakeLLMProvider:
         if isinstance(self.output, Exception):
             raise self.output
         return self.output
+
+
+def _grounded_envelope(
+    claims: list[tuple[str, list[str]]],
+    *,
+    unused: list[str] | None = None,
+    limitations: list[str] | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "answerable": True,
+            "claims": [
+                {"text": text, "citation_ids": citation_ids} for text, citation_ids in claims
+            ],
+            "unused_evidence": [
+                {"citation_id": citation_id, "reason": "fixture: not used"}
+                for citation_id in (unused or [])
+            ],
+            "limitations": limitations or [],
+        },
+        ensure_ascii=False,
+    )
+
+
+def _refusal_envelope(**extra: object) -> str:
+    return json.dumps(
+        {"answerable": False, "claims": [], **extra},
+        ensure_ascii=False,
+    )
 
 
 def _upload(client: TestClient, path: Path, filename: str = "document.pdf") -> str:
@@ -102,7 +135,7 @@ def test_default_mode_stays_evidence_only_and_does_not_call_provider(
     api_factory,
     single_page_pdf: Path,
 ) -> None:
-    fake = FakeLLMProvider('{"answer": "should not be used", "citation_ids": ["E1"]}')
+    fake = FakeLLMProvider(_grounded_envelope([("should not be used", ["E1"])]))
     api = api_factory(llm_provider=fake)
     document_id = _upload(api.client, single_page_pdf)
     _index(api.client, document_id)
@@ -156,22 +189,9 @@ def test_grounded_answer_uses_retrieved_evidence_and_server_citation_fields(
     single_page_pdf: Path,
 ) -> None:
     fake = FakeLLMProvider(
-        json.dumps(
-            {
-                "answer": "文档中多次出现 quick。",
-                "citation_ids": ["E2", "E1", "E2"],
-                "citations": [
-                    {
-                        "document_id": "00000000-0000-0000-0000-000000000000",
-                        "chunk_id": "chk_forged",
-                        "page_index": 99,
-                        "match_start": 0,
-                        "match_end": 1,
-                        "rects": [{"left": 0, "bottom": 0, "right": 1, "top": 1}],
-                    }
-                ],
-            },
-            ensure_ascii=False,
+        _grounded_envelope(
+            [("文档中多次出现 quick。", ["E2", "E1", "E2"])],
+            unused=["E3", "E4"],
         )
     )
     api = api_factory(llm_provider=fake)
@@ -233,9 +253,7 @@ def test_pdf_instruction_text_is_untrusted_data_not_system_prompt(
         "injection.pdf",
         [[(100.0, 700.0, injection), (100.0, 650.0, "quick evidence text")]],
     )
-    fake = FakeLLMProvider(
-        json.dumps({"answer": "依据 E1。", "citation_ids": ["E1"]}, ensure_ascii=False)
-    )
+    fake = FakeLLMProvider(_grounded_envelope([("依据 E1。", ["E1"])]))
     api = api_factory(llm_provider=fake)
     document_id = _upload(api.client, path)
     _index(api.client, document_id)
@@ -256,7 +274,12 @@ def test_unknown_citation_id_is_rejected_without_echoing_model_text(
     api_factory,
     single_page_pdf: Path,
 ) -> None:
-    fake = FakeLLMProvider('{"answer": "UNVERIFIED MODEL PROSE", "citation_ids": ["E1", "E99"]}')
+    fake = FakeLLMProvider(
+        _grounded_envelope(
+            [("UNVERIFIED MODEL PROSE", ["E1", "E99"])],
+            unused=["E2", "E3", "E4"],
+        )
+    )
     api = api_factory(llm_provider=fake)
     document_id = _upload(api.client, single_page_pdf)
     _index(api.client, document_id)
@@ -280,11 +303,11 @@ def test_invalid_model_json_returns_502(api_factory, single_page_pdf: Path) -> N
     assert response.json()["detail"] == "LLM response could not be verified"
 
 
-def test_model_without_citations_discards_its_answer(
+def test_explicit_refusal_discards_free_text(
     api_factory,
     single_page_pdf: Path,
 ) -> None:
-    fake = FakeLLMProvider('{"answer": "UNSUPPORTED MODEL CLAIM", "citation_ids": []}')
+    fake = FakeLLMProvider(_refusal_envelope(answer="UNSUPPORTED MODEL CLAIM"))
     api = api_factory(llm_provider=fake)
     document_id = _upload(api.client, single_page_pdf)
     _index(api.client, document_id)
@@ -299,11 +322,518 @@ def test_model_without_citations_discards_its_answer(
     assert body["citations"] == []
 
 
+def test_refusal_can_account_for_valid_but_unused_evidence(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    # A real occurrence is present, but the model explicitly declines to use it.
+    # A valid citation id alone must not force an answer.
+    fake = FakeLLMProvider(
+        _refusal_envelope(
+            unused_evidence=[
+                {"citation_id": "E1", "reason": "the occurrence does not answer the question"}
+            ]
+        )
+    )
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "insufficient_evidence"
+    assert body["answer"] == GROUNDED_NO_CITATION_ANSWER
+    assert body["citations"] == []
+    assert "the occurrence does not answer the question" not in response.text
+
+
+def test_refusal_with_claims_is_rejected_without_echoing_text(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    fake = FakeLLMProvider(
+        json.dumps(
+            {
+                "answerable": False,
+                "claims": [{"text": "LEAKED REFUSAL TEXT", "citation_ids": ["E1"]}],
+            },
+            ensure_ascii=False,
+        )
+    )
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 502, response.text
+    assert "LEAKED REFUSAL TEXT" not in response.text
+
+
+def test_refusal_with_limitations_discards_them(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    fake = FakeLLMProvider(
+        _refusal_envelope(limitations=["模型推测的限制说明"], unused_evidence=[])
+    )
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "insufficient_evidence"
+    assert body["answer"] == GROUNDED_NO_CITATION_ANSWER
+    assert "模型推测的限制说明" not in response.text
+    assert body["citations"] == []
+
+
+def test_canonical_refusal_with_empty_claims_returns_insufficient_evidence(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    fake = FakeLLMProvider(_refusal_envelope(unused_evidence=[], limitations=[]))
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "insufficient_evidence"
+    assert body["answer"] == GROUNDED_NO_CITATION_ANSWER
+    assert body["citations"] == []
+    assert len(fake.calls) == 1
+
+
+def test_minimal_refusal_without_auxiliary_fields_is_accepted(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    # The auxiliary fields are discarded on refusal, so an envelope without them
+    # is still a valid refusal (legacy and reduced shapes are both accepted).
+    fake = FakeLLMProvider(json.dumps({"answerable": False, "claims": []}))
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "insufficient_evidence"
+    assert body["answer"] == GROUNDED_NO_CITATION_ANSWER
+    assert body["citations"] == []
+
+
+def test_truncated_refusal_json_is_rejected_as_a_protocol_error(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    # Malformed output must not be turned into a refusal: an incomplete envelope
+    # is still invalid JSON and fails closed.
+    fake = FakeLLMProvider(
+        '{"answerable": false, "claims": [], "unused_evidence": '
+        '[{"citation_id": "E1", "reason": "cut'
+    )
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 502, response.text
+    assert response.json()["detail"] == "LLM response could not be verified"
+    assert "reason" not in response.text
+
+
+def test_refusal_with_malformed_discarded_auxiliary_fields_is_accepted(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    # A clear refusal carries no claims and therefore no model-derived text or
+    # citations. Its auxiliary fields are discarded, so their shape must not
+    # turn the refusal into a server-side verification failure.
+    fake = FakeLLMProvider(
+        json.dumps(
+            {
+                "answerable": False,
+                "claims": [],
+                "unused_evidence": "not-an-array",
+                "limitations": [123],
+            },
+            ensure_ascii=False,
+        )
+    )
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "insufficient_evidence"
+    assert body["answer"] == GROUNDED_NO_CITATION_ANSWER
+    assert body["citations"] == []
+
+
+def test_refusal_with_claims_is_still_rejected_when_auxiliary_fields_are_malformed(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    fake = FakeLLMProvider(
+        json.dumps(
+            {
+                "answerable": False,
+                "claims": [{"text": "LEAKED REFUSAL TEXT", "citation_ids": ["E1"]}],
+                "unused_evidence": "not-an-array",
+            },
+            ensure_ascii=False,
+        )
+    )
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 502, response.text
+    assert "LEAKED REFUSAL TEXT" not in response.text
+
+
+def test_answerable_response_ignores_malformed_legacy_unused_evidence(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    # unused_evidence is no longer part of the model contract. A legacy field,
+    # even a malformed one, is ignored: accounting is computed by the server.
+    payload = {
+        "answerable": True,
+        "claims": [{"text": "only the first occurrence", "citation_ids": ["E1"]}],
+        "unused_evidence": "not-an-array",
+        "limitations": [],
+    }
+    fake = FakeLLMProvider(json.dumps(payload, ensure_ascii=False))
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "answered"
+    assert [citation["citation_id"] for citation in body["citations"]] == ["E1"]
+
+
+def test_answerable_response_still_rejects_malformed_limitations(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    payload = {
+        "answerable": True,
+        "claims": [{"text": "only the first occurrence", "citation_ids": ["E1"]}],
+        "limitations": [123],
+    }
+    fake = FakeLLMProvider(json.dumps(payload, ensure_ascii=False))
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 502, response.text
+    assert response.json()["detail"] == "LLM response could not be verified"
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        '{"answer": "", "citation_ids": []}',
+        '{"answer": "legacy prose", "citation_ids": ["E1"]}',
+        '{"claims": []}',
+        '{"answerable": "yes", "claims": []}',
+        '{"answerable": false, "claims": "none"}',
+    ],
+)
+def test_invalid_or_legacy_envelopes_are_rejected(
+    api_factory,
+    single_page_pdf: Path,
+    output: str,
+) -> None:
+    fake = FakeLLMProvider(output)
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 502, response.text
+    assert response.json()["detail"] == "LLM response could not be verified"
+
+
+def test_answerable_without_a_claim_is_rejected(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    fake = FakeLLMProvider(
+        json.dumps(
+            {"answerable": True, "claims": [], "citation_ids": ["E1"]},
+            ensure_ascii=False,
+        )
+    )
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 502, response.text
+    assert response.json()["detail"] == "LLM response could not be verified"
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        {"text": "", "citation_ids": ["E1"]},
+        {"text": "   ", "citation_ids": ["E1"]},
+        {"text": "supported text", "citation_ids": []},
+        {"text": "supported text", "citation_ids": "E1"},
+        {"text": "supported text", "citation_ids": ["E99"]},
+        "not-an-object",
+    ],
+)
+def test_malformed_claim_is_rejected(
+    api_factory,
+    single_page_pdf: Path,
+    claim: object,
+) -> None:
+    fake = FakeLLMProvider(
+        json.dumps(
+            {
+                "answerable": True,
+                "claims": [claim],
+                "unused_evidence": [
+                    {"citation_id": "E1", "reason": "fixture"},
+                    {"citation_id": "E2", "reason": "fixture"},
+                    {"citation_id": "E3", "reason": "fixture"},
+                    {"citation_id": "E4", "reason": "fixture"},
+                ],
+            },
+            ensure_ascii=False,
+        )
+    )
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 502, response.text
+
+
+def test_unaccounted_evidence_is_computed_by_the_server(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    # E3 and E4 are neither cited nor mentioned by the model. The server
+    # derives them as unused instead of demanding model-side enumeration.
+    fake = FakeLLMProvider(
+        _grounded_envelope([("only the first occurrence", ["E1"])], unused=["E2"])
+    )
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "answered"
+    assert body["answer"] == "only the first occurrence"
+    assert [citation["citation_id"] for citation in body["citations"]] == ["E1"]
+
+    result = api.app.state.question_service.answer(
+        UUID(document_id),
+        "quick 出现在哪里?",
+        retrieval_query="quick",
+        max_citations=10,
+        answer_mode="grounded_generation",
+    )
+    assert result.unused_evidence_ids == ("E2", "E3", "E4")
+
+
+def test_answerable_response_without_legacy_accounting_is_accepted(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    fake = FakeLLMProvider(
+        json.dumps(
+            {
+                "answerable": True,
+                "claims": [{"text": "only the first occurrence", "citation_ids": ["E1"]}],
+            },
+            ensure_ascii=False,
+        )
+    )
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "answered"
+    assert [citation["citation_id"] for citation in body["citations"]] == ["E1"]
+
+
+def test_legacy_unused_evidence_reason_is_ignored(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    # An empty reason would have failed the old accounting rule; the field is
+    # now ignored because the server owns the unused set.
+    fake = FakeLLMProvider(
+        json.dumps(
+            {
+                "answerable": True,
+                "claims": [{"text": "only the first occurrence", "citation_ids": ["E1"]}],
+                "unused_evidence": [
+                    {"citation_id": "E2", "reason": ""},
+                    {"citation_id": "E3", "reason": "not needed"},
+                    {"citation_id": "E4", "reason": "not needed"},
+                ],
+            },
+            ensure_ascii=False,
+        )
+    )
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "answered"
+
+
+def test_cited_evidence_is_never_moved_to_the_server_unused_set(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    # A legacy field that lists a cited id as unused must not shrink citations.
+    fake = FakeLLMProvider(
+        _grounded_envelope(
+            [("only the first occurrence", ["E1"])],
+            unused=["E1", "E2", "E3", "E4"],
+        )
+    )
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [citation["citation_id"] for citation in body["citations"]] == ["E1"]
+
+
+def test_multi_claim_answer_keeps_each_linked_evidence(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    fake = FakeLLMProvider(
+        _grounded_envelope(
+            [
+                ("quick appears in the first sentence.", ["E1"]),
+                ("It appears again in a later sentence.", ["E2"]),
+            ],
+            unused=["E3", "E4"],
+        )
+    )
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["answer"] == (
+        "quick appears in the first sentence.\nIt appears again in a later sentence."
+    )
+    assert [citation["citation_id"] for citation in body["citations"]] == ["E1", "E2"]
+
+
+def test_structurally_linked_claim_is_not_marked_as_fact_checked(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    # The server checks that a claim cites a supplied id; it does not check
+    # entailment, relevance or truth. Nothing in the response claims otherwise.
+    fake = FakeLLMProvider(_grounded_envelope([("The evidence proves the opposite.", ["E1"])]))
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "answered"
+    assert set(body) == {
+        "document_id",
+        "question",
+        "retrieval_query",
+        "retrieval_mode",
+        "match_case",
+        "answer_mode",
+        "status",
+        "answer",
+        "total_matches",
+        "citations",
+    }
+
+
+def test_limitations_are_surfaced_as_an_explicit_gap_note(
+    api_factory,
+    single_page_pdf: Path,
+) -> None:
+    fake = FakeLLMProvider(
+        _grounded_envelope(
+            [("The evidence states one occurrence.", ["E1"])],
+            unused=["E2", "E3", "E4"],
+            limitations=["The recipients are not stated."],
+        )
+    )
+    api = api_factory(llm_provider=fake)
+    document_id = _upload(api.client, single_page_pdf)
+    _index(api.client, document_id)
+
+    response = _ask(api.client, document_id, mode="grounded_generation")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["answer"] == (
+        "The evidence states one occurrence.\n证据未覆盖: The recipients are not stated."
+    )
+    assert [citation["citation_id"] for citation in body["citations"]] == ["E1"]
+
+
 def test_empty_retrieval_does_not_call_the_model(
     api_factory,
     single_page_pdf: Path,
 ) -> None:
-    fake = FakeLLMProvider('{"answer": "never used", "citation_ids": ["E1"]}')
+    fake = FakeLLMProvider(_grounded_envelope([("never used", ["E1"])]))
     api = api_factory(llm_provider=fake)
     document_id = _upload(api.client, single_page_pdf)
     _index(api.client, document_id)
@@ -352,7 +882,9 @@ def test_repeated_text_keeps_exact_span_and_locates_real_geometry(
     api_factory,
     single_page_pdf: Path,
 ) -> None:
-    fake = FakeLLMProvider('{"answer": "第二次出现。", "citation_ids": ["E2"]}')
+    fake = FakeLLMProvider(
+        _grounded_envelope([("第二次出现。", ["E2"])], unused=["E1", "E3", "E4"])
+    )
     api = api_factory(llm_provider=fake)
     document_id = _upload(api.client, single_page_pdf)
     _index(api.client, document_id)
@@ -397,7 +929,7 @@ def test_cross_document_retrieval_is_rejected_before_the_model(
 ) -> None:
     document_id = _upload(api.client, single_page_pdf)
     _index(api.client, document_id)
-    fake = FakeLLMProvider('{"answer": "x", "citation_ids": ["E1"]}')
+    fake = FakeLLMProvider(_grounded_envelope([("x", ["E1"])]))
     foreign_match = RetrievalMatch(
         document_id=uuid4(),
         chunk_id="chk_foreign",
@@ -443,7 +975,7 @@ def test_cross_document_retrieval_is_rejected_before_the_model(
 
 
 def test_invalid_answer_mode_is_rejected(api_factory, single_page_pdf: Path) -> None:
-    fake = FakeLLMProvider('{"answer": "x", "citation_ids": ["E1"]}')
+    fake = FakeLLMProvider(_grounded_envelope([("x", ["E1"])]))
     api = api_factory(llm_provider=fake)
     document_id = _upload(api.client, single_page_pdf)
     _index(api.client, document_id)
