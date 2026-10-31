@@ -8,11 +8,12 @@ literal fallback; they do not measure real embedding quality.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,12 +25,20 @@ from semantic_fakes import (
     keyword_vector,
 )
 
+from rag_anchor.api.schemas import QuestionRequest
+from rag_anchor.domain.text import TEXT_EXTRACTION_VERSION
 from rag_anchor.infra.embedding import (
     EmbeddingModelIdentity,
     EmbeddingServiceError,
     EmbeddingTimeoutError,
 )
 from rag_anchor.infra.llm import LLMMessage
+from rag_anchor.services.qa_service import (
+    QuestionAnswerService,
+    QuestionCitationScopeError,
+)
+from rag_anchor.services.semantic_candidates import build_candidate_id
+from rag_anchor.services.semantic_service import SemanticMatch, SemanticSearchResult
 
 DOCUMENTS_URL = "/api/v1/documents"
 SEMANTIC_INDEX_URL = DOCUMENTS_URL + "/{document_id}/semantic-index"
@@ -39,6 +48,22 @@ EVIDENCE_URL = DOCUMENTS_URL + "/{document_id}/evidence/locate"
 STAGES = "The project has three stages: ingestion, retrieval, and evidence verification."
 PHOTO = "The photo is stored separately."
 CHINESE_QUESTION = "这个项目有哪些阶段？"  # noqa: RUF001
+
+SELECTION_QUESTION = "How many pages may a PDF contain?"
+SELECTION_SEED = "The maximum number of pages in a PDF is five hundred."
+SELECTION_NEIGHBOR = "A PDF with many pages may take longer to upload."
+SELECTION_HIGH = "The upload limit applies to every account."
+SELECTION_SECOND = "PDF previews are limited to the first ten pages."
+SELECTION_THIRD = "The document owner may grant access to a shared file."
+SELECTION_FOURTH = "Authentication requires a hardware security key."
+SELECTION_SCORES = {
+    SELECTION_SEED: 0.90,
+    SELECTION_HIGH: 0.89,
+    SELECTION_SECOND: 0.88,
+    SELECTION_THIRD: 0.87,
+    SELECTION_FOURTH: 0.86,
+    SELECTION_NEIGHBOR: 0.81,
+}
 
 QA_FIELDS = {
     "document_id",
@@ -183,6 +208,23 @@ def semantic_pdf(pdf_factory) -> Path:
     )
 
 
+@pytest.fixture
+def selection_pdf(pdf_factory) -> Path:
+    return pdf_factory(
+        "selection.pdf",
+        [
+            [
+                (100.0, 700.0, SELECTION_SEED),
+                (100.0, 650.0, SELECTION_NEIGHBOR),
+                (100.0, 600.0, SELECTION_HIGH),
+                (100.0, 550.0, SELECTION_SECOND),
+                (100.0, 500.0, SELECTION_THIRD),
+                (100.0, 450.0, SELECTION_FOURTH),
+            ]
+        ],
+    )
+
+
 def _upload(client: TestClient, path: Path, filename: str = "document.pdf") -> str:
     response = client.post(
         DOCUMENTS_URL,
@@ -226,6 +268,55 @@ def _pages(api, document_id: str) -> dict[int, str]:
         page.page_index: page.text
         for page in api.app.state.document_service.repository.get_document_page_texts(document_uuid)
     }
+
+
+def _score_vector(score: float) -> list[float]:
+    vector = [0.0] * VECTOR_DIMENSION
+    vector[0] = score
+    vector[1] = math.sqrt(max(0.0, 1.0 - score * score))
+    return vector
+
+
+def _selection_provider(
+    question: str = SELECTION_QUESTION,
+    *,
+    query_vector: list[float] | None = None,
+) -> VectorMapEmbeddingProvider:
+    vectors = {text: _score_vector(score) for text, score in SELECTION_SCORES.items()}
+    vectors[question] = query_vector or [1.0] + [0.0] * (VECTOR_DIMENSION - 1)
+    return VectorMapEmbeddingProvider(vectors)
+
+
+def _semantic_snapshot(api, document_id: str) -> list[tuple]:
+    return [
+        (
+            record.candidate_id,
+            record.page_index,
+            record.start_offset,
+            record.end_offset,
+            record.source_text,
+            record.vector,
+        )
+        for record in api.app.state.document_service.repository.list_semantic_candidates(
+            UUID(document_id)
+        )
+    ]
+
+
+def _expected_candidate_ids(
+    document_id: str,
+    page_text: str,
+    texts: list[str],
+) -> list[str]:
+    return [
+        build_candidate_id(
+            document_id=UUID(document_id),
+            page_index=0,
+            start_offset=page_text.index(text),
+            end_offset=page_text.index(text) + len(text),
+        )
+        for text in texts
+    ]
 
 
 def test_semantic_build_endpoint_returns_index_provenance(api_factory, semantic_pdf: Path) -> None:
@@ -814,3 +905,293 @@ def test_query_time_embedding_failure_is_reported(
 
     assert response.status_code == status_code, response.text
     assert response.json()["detail"]
+
+
+def test_neighbor_v1_selects_one_near_sentence_and_preserves_exact_spans(
+    api_factory,
+    selection_pdf: Path,
+) -> None:
+    provider = _selection_provider()
+    api = api_factory(
+        embedding_provider=provider,
+        semantic_selection_mode="neighbor_v1",
+    )
+    document_id = _ready(api, selection_pdf)
+    before = _semantic_snapshot(api, document_id)
+    provider.calls.clear()
+
+    response = _ask(
+        api.client,
+        document_id,
+        {
+            "question": SELECTION_QUESTION,
+            "retrieval_mode": "semantic",
+            "max_citations": 3,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total_matches"] == 6
+    assert len(body["citations"]) == 3
+    citations = body["citations"]
+    assert [citation["support_text"] for citation in citations] == [
+        SELECTION_SEED,
+        SELECTION_HIGH,
+        SELECTION_NEIGHBOR,
+    ]
+
+    page_text = _pages(api, document_id)[0]
+    expected_texts = [SELECTION_SEED, SELECTION_HIGH, SELECTION_NEIGHBOR]
+    for citation, text in zip(citations, expected_texts, strict=True):
+        start = page_text.index(text)
+        end = start + len(text)
+        assert citation["page_index"] == 0
+        assert citation["page_number"] == 1
+        assert citation["match_start"] == citation["support_start"] == start
+        assert citation["match_end"] == citation["support_end"] == end
+        assert page_text[start:end] == text
+
+    expected_ids = _expected_candidate_ids(
+        document_id,
+        page_text,
+        [SELECTION_SEED, SELECTION_HIGH, SELECTION_NEIGHBOR],
+    )
+    selected_ids = [
+        build_candidate_id(
+            document_id=UUID(document_id),
+            page_index=citation["page_index"],
+            start_offset=citation["support_start"],
+            end_offset=citation["support_end"],
+        )
+        for citation in citations
+    ]
+    assert selected_ids == expected_ids
+    assert provider.calls == [[SELECTION_QUESTION]]
+    assert _semantic_snapshot(api, document_id) == before
+
+    neighbor = citations[2]
+    located = _locate(
+        api.client,
+        document_id,
+        [
+            {
+                "page_index": neighbor["page_index"],
+                "match_start": neighbor["support_start"],
+                "match_end": neighbor["support_end"],
+                "hit_text": neighbor["support_text"],
+                "chunk_id": neighbor["chunk_id"],
+            }
+        ],
+    )
+
+    assert located.status_code == 200, located.text
+    result = located.json()["results"][0]
+    assert result["match_start"] == neighbor["support_start"]
+    assert result["match_end"] == neighbor["support_end"]
+    assert result["matched_text"] == SELECTION_NEIGHBOR
+    assert result["rects"]
+
+
+def test_default_selection_remains_legacy_and_total_matches_is_unchanged(
+    api_factory,
+    selection_pdf: Path,
+) -> None:
+    provider = _selection_provider()
+    neighbor_api = api_factory(
+        embedding_provider=provider,
+        semantic_selection_mode="neighbor_v1",
+    )
+    document_id = _ready(neighbor_api, selection_pdf)
+    default_api = api_factory(embedding_provider=provider)
+    provider.calls.clear()
+
+    payload = {
+        "question": SELECTION_QUESTION,
+        "retrieval_mode": "semantic",
+        "max_citations": 3,
+    }
+    default = _ask(default_api.client, document_id, payload)
+    neighbor = _ask(neighbor_api.client, document_id, payload)
+
+    assert default.status_code == 200, default.text
+    assert neighbor.status_code == 200, neighbor.text
+    assert [citation["support_text"] for citation in default.json()["citations"]] == [
+        SELECTION_SEED,
+        SELECTION_HIGH,
+        SELECTION_SECOND,
+    ]
+    assert [citation["support_text"] for citation in neighbor.json()["citations"]] == [
+        SELECTION_SEED,
+        SELECTION_HIGH,
+        SELECTION_NEIGHBOR,
+    ]
+    assert default.json()["total_matches"] == neighbor.json()["total_matches"] == 6
+    assert set(default.json()) == QA_FIELDS
+    assert "selection_mode" not in QuestionRequest.model_fields
+    assert provider.calls == [[SELECTION_QUESTION], [SELECTION_QUESTION]]
+
+
+def test_neighbor_selection_feeds_grounded_generation_in_ranked_order(
+    api_factory,
+    selection_pdf: Path,
+) -> None:
+    provider = _selection_provider()
+    fake_llm = StructuredRecordingLLMProvider([("上限为五百页。", ["E1"])])
+    api = api_factory(
+        embedding_provider=provider,
+        llm_provider=fake_llm,
+        semantic_selection_mode="neighbor_v1",
+    )
+    document_id = _ready(api, selection_pdf)
+    provider.calls.clear()
+
+    response = _ask(
+        api.client,
+        document_id,
+        {
+            "question": SELECTION_QUESTION,
+            "retrieval_mode": "semantic",
+            "answer_mode": "grounded_generation",
+            "max_citations": 3,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "answered"
+    assert len(fake_llm.calls) == 1
+    payload = json.loads(fake_llm.calls[0][-1].content)
+    assert [item["id"] for item in payload["evidence"]] == ["E1", "E2", "E3"]
+    assert [item["text"] for item in payload["evidence"]] == [
+        SELECTION_SEED,
+        SELECTION_HIGH,
+        SELECTION_NEIGHBOR,
+    ]
+    assert [citation["citation_id"] for citation in response.json()["citations"]] == ["E1"]
+    assert response.json()["citations"][0]["support_text"] == SELECTION_SEED
+    assert provider.calls == [[SELECTION_QUESTION]]
+
+
+def test_neighbor_selection_never_falls_back_to_literal_or_calls_the_model(
+    api_factory,
+    selection_pdf: Path,
+) -> None:
+    query = "maximum"
+    provider = _selection_provider(
+        query,
+        query_vector=[0.0, 0.0, 1.0] + [0.0] * (VECTOR_DIMENSION - 3),
+    )
+    fake_llm = RecordingLLMProvider("must not be used")
+    api = api_factory(
+        embedding_provider=provider,
+        llm_provider=fake_llm,
+        semantic_selection_mode="neighbor_v1",
+    )
+    document_id = _ready(api, selection_pdf)
+    provider.calls.clear()
+
+    response = _ask(
+        api.client,
+        document_id,
+        {
+            "question": query,
+            "retrieval_mode": "semantic",
+            "answer_mode": "grounded_generation",
+            "max_citations": 3,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["retrieval_mode"] == "semantic"
+    assert body["status"] == "insufficient_evidence"
+    assert body["citations"] == []
+    assert "没有在文档中找到相似度足够的原文候选证据" in body["answer"]
+    assert fake_llm.calls == []
+    assert provider.calls == [[query]]
+
+    literal = _ask(
+        api.client,
+        document_id,
+        {"question": query, "retrieval_mode": "literal"},
+    )
+    assert literal.status_code == 200, literal.text
+    assert literal.json()["status"] == "evidence_found"
+    assert literal.json()["citations"]
+    assert provider.calls == [[query]]
+
+
+def test_neighbor_selection_still_rejects_a_changed_embedding_model(
+    api_factory,
+    selection_pdf: Path,
+) -> None:
+    provider = _selection_provider()
+    api = api_factory(
+        embedding_provider=provider,
+        semantic_selection_mode="neighbor_v1",
+    )
+    document_id = _ready(api, selection_pdf)
+    provider.calls.clear()
+
+    provider.model_version = "v2"
+    response = _ask(
+        api.client,
+        document_id,
+        {
+            "question": SELECTION_QUESTION,
+            "retrieval_mode": "semantic",
+            "max_citations": 3,
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    assert "different embedding model" in response.json()["detail"]
+    assert provider.calls == []
+
+
+def test_neighbor_selection_rejects_a_foreign_document_match_before_the_model(
+    api_factory,
+    semantic_pdf: Path,
+) -> None:
+    fake_llm = RecordingLLMProvider("must not be used")
+    api = api_factory(embedding_provider=FakeEmbeddingProvider(), llm_provider=fake_llm)
+    document_id = _upload(api.client, semantic_pdf)
+    _index(api.client, document_id)
+    foreign = SemanticMatch(
+        document_id=uuid4(),
+        chunk_id="chk_foreign",
+        page_index=0,
+        page_number=1,
+        chunk_index=0,
+        start_offset=0,
+        end_offset=5,
+        source_text="quick",
+        score=0.9,
+        extraction_version=TEXT_EXTRACTION_VERSION,
+    )
+
+    class ForeignSemanticService:
+        def search(self, document_id, query, **kwargs):
+            return SemanticSearchResult(
+                query=query,
+                min_score=0.3,
+                total=1,
+                matches=[foreign],
+            )
+
+    service = QuestionAnswerService(
+        api.app.state.document_service,
+        api.app.state.retrieval_service,
+        fake_llm,
+        semantic_service=ForeignSemanticService(),  # type: ignore[arg-type]
+        selection_mode="neighbor_v1",
+    )
+
+    with pytest.raises(QuestionCitationScopeError):
+        service.answer(
+            UUID(document_id),
+            "quick",
+            retrieval_mode="semantic",
+            max_citations=3,
+        )
+    assert fake_llm.calls == []

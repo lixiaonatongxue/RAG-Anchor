@@ -18,6 +18,7 @@ from rag_anchor.config import Settings
 from rag_anchor.infra.embedding import EmbeddingProvider, build_embedding_provider
 from rag_anchor.infra.llm import LLMProvider, build_llm_provider
 from rag_anchor.services.document_service import DocumentService
+from rag_anchor.services.evidence_selection import SELECTION_MODE_LEGACY
 from rag_anchor.services.evidence_service import EvidenceLocationService
 from rag_anchor.services.index_service import DocumentIndexService
 from rag_anchor.services.qa_service import QuestionAnswerService
@@ -39,6 +40,7 @@ def create_app(
     *,
     llm_provider: LLMProvider | None = None,
     embedding_provider: EmbeddingProvider | None = None,
+    semantic_selection_mode: str = SELECTION_MODE_LEGACY,
 ) -> FastAPI:
     """Build and return the FastAPI application.
 
@@ -47,6 +49,9 @@ def create_app(
     ``llm_provider`` and ``embedding_provider`` are injection points for
     offline tests; production uses providers built from environment settings,
     which are disabled by default and never probed during construction.
+    ``semantic_selection_mode`` is an internal experiment switch; the default
+    keeps the existing semantic candidate selection unchanged and it is not
+    exposed as a request field.
     """
     resolved_settings = settings or Settings.from_env()
     document_service = DocumentService(resolved_settings)
@@ -71,6 +76,7 @@ def create_app(
         retrieval_service,
         resolved_llm_provider,
         semantic_service=semantic_service,
+        selection_mode=semantic_selection_mode,
     )
 
     @asynccontextmanager

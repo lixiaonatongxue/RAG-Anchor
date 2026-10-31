@@ -36,6 +36,13 @@ from rag_anchor.infra.llm import (
     LLMProvider,
 )
 from rag_anchor.services.document_service import DocumentNotFoundError, DocumentService
+from rag_anchor.services.evidence_selection import (
+    SELECTION_MODE_LEGACY,
+    SELECTION_MODE_NEIGHBOR_V1,
+    SELECTION_MODES,
+    select_semantic_evidence,
+    selection_pool_size,
+)
 from rag_anchor.services.retrieval_service import (
     MAX_QUERY_LENGTH,
     ChunkRetrievalService,
@@ -233,7 +240,10 @@ class QuestionAnswerService:
         llm_provider: LLMProvider | None = None,
         *,
         semantic_service: SemanticIndexService | None = None,
+        selection_mode: str = SELECTION_MODE_LEGACY,
     ) -> None:
+        if selection_mode not in SELECTION_MODES:
+            raise ValueError(f"selection_mode must be one of {sorted(SELECTION_MODES)}")
         self._document_service = document_service
         self._retrieval_service = retrieval_service
         self._repository: DocumentRepository = document_service.repository
@@ -241,6 +251,7 @@ class QuestionAnswerService:
             "Grounded generation is not enabled"
         )
         self._semantic_service = semantic_service
+        self._selection_mode = selection_mode
 
     @property
     def repository(self) -> DocumentRepository:
@@ -263,9 +274,12 @@ class QuestionAnswerService:
         mode it is substring-matched by the existing chunk search; in
         ``semantic`` mode it is ignored and only the question is embedded
         against the derived index. ``match_case`` only affects literal
-        retrieval. Only the first ``max_citations`` matches become citations,
-        while ``total_matches`` reports the unpaginated count. An empty
-        retrieval never calls the model, regardless of mode.
+        retrieval. The final citation count never exceeds ``max_citations``.
+        In the default ``legacy`` semantic selection mode that means the first
+        ``max_citations`` ranked candidates; the internal ``neighbor_v1``
+        experiment may choose from a wider ranked pool. ``total_matches``
+        always reports the unpaginated count above the score threshold. An
+        empty retrieval never calls the model, regardless of mode.
         """
         _validate_text(question, "question", MAX_QUESTION_LENGTH)
         effective_query = question if retrieval_query is None else retrieval_query
@@ -379,12 +393,18 @@ class QuestionAnswerService:
         if self._semantic_service is None:
             raise SemanticIndexUnavailableError("Semantic retrieval is not configured")
 
+        neighbor_selection = self._selection_mode == SELECTION_MODE_NEIGHBOR_V1
         result = self._semantic_service.search(
             document_id,
             retrieval_query,
-            top_k=max_citations,
+            top_k=(selection_pool_size(max_citations) if neighbor_selection else max_citations),
         )
-        citations = self._build_semantic_citations(document_id, result.matches)
+        matches = (
+            select_semantic_evidence(result.matches, limit=max_citations)
+            if neighbor_selection
+            else result.matches
+        )
+        citations = self._build_semantic_citations(document_id, matches)
         if not citations:
             return QuestionAnswer(
                 document_id=document_id,
@@ -828,6 +848,8 @@ __all__ = [
     "RETRIEVAL_MODES",
     "RETRIEVAL_MODE_LITERAL",
     "RETRIEVAL_MODE_SEMANTIC",
+    "SELECTION_MODE_LEGACY",
+    "SELECTION_MODE_NEIGHBOR_V1",
     "SEMANTIC_EVIDENCE_FOUND_ANSWER",
     "SEMANTIC_GROUNDED_INSUFFICIENT_EVIDENCE_ANSWER",
     "SEMANTIC_INSUFFICIENT_EVIDENCE_ANSWER",

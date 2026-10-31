@@ -78,16 +78,19 @@ def api_factory(tmp_path: Path) -> Iterator[Callable[..., ApiContext]]:
         max_upload_bytes: int | None = None,
         llm_provider: LLMProvider | None = None,
         embedding_provider: EmbeddingProvider | None = None,
+        semantic_selection_mode: str | None = None,
     ) -> ApiContext:
         kwargs: dict[str, object] = {"data_dir": data_dir or tmp_path / "data"}
         if max_upload_bytes is not None:
             kwargs["max_upload_bytes"] = max_upload_bytes
         settings = Settings(**kwargs)  # type: ignore[arg-type]
-        application = create_app(
-            settings,
-            llm_provider=llm_provider,
-            embedding_provider=embedding_provider,
-        )
+        app_kwargs: dict[str, object] = {
+            "llm_provider": llm_provider,
+            "embedding_provider": embedding_provider,
+        }
+        if semantic_selection_mode is not None:
+            app_kwargs["semantic_selection_mode"] = semantic_selection_mode
+        application = create_app(settings, **app_kwargs)  # type: ignore[arg-type]
         client = stack.enter_context(TestClient(application))
         return ApiContext(app=application, client=client, settings=settings)
 
