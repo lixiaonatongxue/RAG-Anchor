@@ -9,10 +9,15 @@ import type {
   RetrievalMode,
   SemanticIndexResponse,
 } from "./api/types";
+import {
+  clearHighlightFor,
+  emptyHighlightState,
+  highlightFor,
+} from "./highlight/ownership";
+import type { HighlightSource, HighlightState } from "./highlight/ownership";
 import { paintHighlights } from "./highlight/renderer";
 import {
   anchorSelection,
-  emptySelection,
   evidenceSelection,
   selectPageHighlights,
 } from "./highlight/selection";
@@ -33,6 +38,8 @@ import {
   semanticFailureMessage,
   semanticIndexFailureMessage,
 } from "./qa/mode";
+import { insufficientEvidenceMessage } from "./qa/refusal";
+import { isCurrentQaResponse } from "./qa/request";
 import {
   CHUNK_PAGE_SIZE,
   chunkEmptyMessage,
@@ -151,12 +158,13 @@ let selectedId: string | null = null;
 let hits: AnchorHit[] = [];
 let activeHitIndex = -1;
 /**
- * The single highlight input for the overlay. Anchor search and chunk evidence
- * both publish into this value, so there is exactly one coordinate conversion
- * path (`highlight/renderer.ts`). A newer selection always replaces the old
- * one instead of being drawn next to it.
+ * The single highlight input for the overlay. Anchor search, chunk evidence
+ * and QA citation location all publish into this state, so there is exactly
+ * one coordinate conversion path (`highlight/renderer.ts`). The source tag
+ * lets QA cleanup clear its own citation without removing an unrelated anchor
+ * or chunk highlight.
  */
-let highlightSelection: HighlightSelection = emptySelection();
+let highlightState: HighlightState = emptyHighlightState();
 let hasSearched = false;
 let searching = false;
 let searchInFlight = false;
@@ -312,8 +320,25 @@ function handleViewerState(state: ViewerState): void {
 function handleRender(pageNumber: number, viewport: PageViewport): void {
   // Switching pages must not leave a highlight from another page on the
   // overlay, and a zoom re-render must map the stored rectangles again.
-  const page = selectPageHighlights(highlightSelection, pageNumber);
+  const page = selectPageHighlights(highlightState.selection, pageNumber);
   paintHighlights(highlightLayer, page.hits, viewport, page.activeLocalIndex);
+}
+
+function setHighlight(
+  source: HighlightSource,
+  selection: HighlightSelection
+): void {
+  highlightState = highlightFor(source, selection);
+}
+
+/** Clear the overlay, or only one source's highlight when `source` is given. */
+function clearHighlight(source?: HighlightSource): void {
+  const next = clearHighlightFor(highlightState, source);
+  if (next === highlightState) {
+    return;
+  }
+  highlightState = next;
+  highlightLayer.replaceChildren();
 }
 
 function showViewerError(message: string): void {
@@ -642,13 +667,12 @@ function updateSearchAvailability(): void {
 function resetSearchResults(): void {
   hits = [];
   activeHitIndex = -1;
-  highlightSelection = emptySelection();
+  clearHighlight();
   hasSearched = false;
   searching = false;
   searchToken += 1;
   searchInFlight = false;
   searchButton.textContent = "搜索";
-  highlightLayer.replaceChildren();
   renderResults();
   updateSearchAvailability();
 }
@@ -742,6 +766,7 @@ function resetQaState(): void {
   locateGate.begin();
   qaCitationItems = [];
   qaActiveIndex = -1;
+  clearHighlight("qa");
   qaInFlight = false;
   qaAnswer.hidden = true;
   qaAnswerMode.textContent = `${retrievalModeLabel(
@@ -1050,7 +1075,7 @@ async function locateChunkHit(index: number): Promise<void> {
       return;
     }
 
-    highlightSelection = evidenceSelection(located);
+    setHighlight("chunk", evidenceSelection(located));
     await viewer.setPage(located.page_number);
 
     const scrollToken = scrollGate.begin();
@@ -1247,6 +1272,14 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
   }
   const token = qaGate.begin();
   locateGate.begin();
+  const requestContext = { documentId, answerMode: mode, retrievalMode };
+  const responseIsCurrent = (): boolean =>
+    isCurrentQaResponse(qaGate, token, requestContext, {
+      documentId: selectedId,
+      answerMode: currentQaMode(),
+      retrievalMode: currentRetrievalMode(),
+    });
+  clearHighlight("qa");
   qaInFlight = true;
   qaCitationItems = [];
   qaActiveIndex = -1;
@@ -1274,12 +1307,7 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
       retrievalMode,
       answerMode: mode,
     });
-    if (
-      !qaGate.isCurrent(token) ||
-      selectedId !== documentId ||
-      currentQaMode() !== mode ||
-      currentRetrievalMode() !== retrievalMode
-    ) {
+    if (!responseIsCurrent()) {
       return;
     }
     if (
@@ -1298,12 +1326,11 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
 
     if (response.status === "insufficient_evidence") {
       qaHint.className = "search-hint";
-      qaHint.textContent =
-        retrievalMode === "semantic"
-          ? "语义检索没有找到相似度足够的候选证据，系统已明确拒答。"
-          : mode === "grounded_generation"
-            ? "模型未返回可验证的原文证据引用，系统已明确拒答。"
-            : "没有找到可支持回答的原文证据，已明确拒答。";
+      qaHint.textContent = insufficientEvidenceMessage(
+        response,
+        retrievalMode,
+        mode
+      );
     } else if (mode === "grounded_generation") {
       qaHint.className = "search-hint is-info";
       qaHint.textContent =
@@ -1318,12 +1345,7 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
           : `按字面「${response.retrieval_query}」找到 ${response.total_matches} 条证据，返回 ${response.citations.length} 条引用。`;
     }
   } catch (error) {
-    if (
-      !qaGate.isCurrent(token) ||
-      selectedId !== documentId ||
-      currentQaMode() !== mode ||
-      currentRetrievalMode() !== retrievalMode
-    ) {
+    if (!responseIsCurrent()) {
       return;
     }
     qaInFlight = false;
@@ -1344,12 +1366,7 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
     qaHint.textContent = message;
     showToast(message, "error");
   } finally {
-    if (
-      qaGate.isCurrent(token) &&
-      selectedId === documentId &&
-      currentQaMode() === mode &&
-      currentRetrievalMode() === retrievalMode
-    ) {
+    if (responseIsCurrent()) {
       qaInFlight = false;
       updateQaAvailability();
     }
@@ -1381,8 +1398,7 @@ async function locateQaCitation(index: number): Promise<void> {
     }
     const located = response.results[0];
     if (!located) {
-      highlightSelection = emptySelection();
-      highlightLayer.replaceChildren();
+      clearHighlight("qa");
       qaActiveIndex = -1;
       renderQaCitations();
       qaHint.className = "search-hint is-error";
@@ -1390,7 +1406,7 @@ async function locateQaCitation(index: number): Promise<void> {
       return;
     }
 
-    highlightSelection = evidenceSelection(located);
+    setHighlight("qa", evidenceSelection(located));
     await viewer.setPage(located.page_number);
 
     const scrollToken = scrollGate.begin();
@@ -1411,12 +1427,12 @@ async function locateQaCitation(index: number): Promise<void> {
     if (!locateGate.isCurrent(requestToken) || selectedId !== documentId) {
       return;
     }
-    // A failed location must not leave an unrelated highlight that could be
-    // mistaken for this citation. No fallback text search is attempted.
+    // A failed location must not leave this citation's highlight behind.
+    // Other highlight sources are untouched. No fallback text search is
+    // attempted.
     qaActiveIndex = -1;
     renderQaCitations();
-    highlightSelection = emptySelection();
-    highlightLayer.replaceChildren();
+    clearHighlight("qa");
     const status = error instanceof ApiError ? error.status : 0;
     const message = evidenceErrorMessage(status, friendlyError(error));
     qaHint.className = "search-hint is-error";
@@ -1495,7 +1511,7 @@ async function activateHit(index: number): Promise<void> {
   }
 
   activeHitIndex = index;
-  highlightSelection = anchorSelection(hits, index);
+  setHighlight("anchor", anchorSelection(hits, index));
   renderResults();
 
   const hit = hits[index];
@@ -1565,12 +1581,11 @@ async function performSearch(event: SubmitEvent): Promise<void> {
   hasSearched = false;
   hits = [];
   activeHitIndex = -1;
-  highlightSelection = emptySelection();
+  clearHighlight();
   searchButton.textContent = "搜索中…";
   updateSearchButton();
   searchHint.className = "search-hint is-info";
   searchHint.textContent = "正在检索 PDF 原文…";
-  highlightLayer.replaceChildren();
   renderResults();
 
   try {
@@ -1592,8 +1607,7 @@ async function performSearch(event: SubmitEvent): Promise<void> {
     if (hits.length === 0) {
       searchHint.className = "search-hint";
       searchHint.textContent = "没有找到匹配证据。";
-      highlightSelection = emptySelection();
-      highlightLayer.replaceChildren();
+      clearHighlight();
     } else {
       searchHint.className = "search-hint is-info";
       searchHint.textContent = `找到 ${response.total} 处命中，已定位第 1 处。`;
@@ -1607,7 +1621,7 @@ async function performSearch(event: SubmitEvent): Promise<void> {
     hasSearched = false;
     hits = [];
     activeHitIndex = -1;
-    highlightSelection = emptySelection();
+    clearHighlight();
     renderResults();
     searchHint.className = "search-hint is-error";
     searchHint.textContent = friendlyError(error);
