@@ -28,6 +28,9 @@ frontend/.vite/
 npm-debug.log*
 yarn-error.log*
 
+# ---- 本地真实测试语料（不公开、不入库） ----
+/test_data/
+
 # ---- 运行时数据（用户上传 PDF、派生文件） ----
 data/
 backend/.benchmark-data/

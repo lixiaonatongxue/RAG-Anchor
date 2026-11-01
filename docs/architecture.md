@@ -391,7 +391,7 @@ POST /api/v1/documents/{document_id}/qa
 - M2-01.1 加强了提示词：要求保持对象/数量/时间/否定/条件绑定，区分操作结果与执行时间，多条件逐项核对，不增加未要求结论，只引用直接支持答案的证据。生成契约改为 `answerable` + `claims` + `limitations`；旧的 `answer`/`citation_ids` 两字段输出（包括空 `answer` + 空 `citation_ids`）不再被接受，缺失 `answerable`/`claims`、空 `claims` 或 `answerable = true` 却无有效引用等结构按 502 处理，标准拒答为 `answerable = false` 且 `claims = []`。服务端仍不校验回答与引用之间的事实蕴含关系。
 - M2-01.1 起生成输出采用 `answerable` + `claims`（每条含 `text` 与 `citation_ids`）+ `limitations` 契约：服务端从 claims 组装回答；未使用证据由服务端用“提供候选 ID − claim 引用 ID”机械计算并记录为内部审计，模型不再枚举 `unused_evidence`。旧 `unused_evidence` 字段若仍出现会被完全忽略，不作为事实支持、相关性或完整性的证明。明确拒答（`answerable=false`、`claims=[]`）丢弃所有辅助字段且不校验其结构；拒答带 claims、引用未知 ID、空 claim、非法 JSON 等仍按 502 拒绝。结构校验仍不验证 claim 与证据的事实蕴含、对象绑定或完整性；旧 `answer`/`citation_ids` 输出按 502 拒绝。
 - 离线比较 Top-5 与 Top-10：Top-10 只多召回 1 条相关句（`cross-page-upload-limits` 的 500 页句，rank 7），同时新增 149 条非相关候选；因此生产候选数仍为 5，阈值仍为 0.30。
-- 已知限制：`keyword-login-method` 仍可能被误拒答；`cross-page-upload-limits` 的 500 页证据仍在当前 Top-5 之外；部分答案仍不完整或超出问题范围；浏览器场景 A–G 尚未实际验收；M2-02 尚未开始。结构合法与引用可定位均不等于事实正确或引用支持答案。
+- 已知限制：`keyword-login-method` 仍可能被误拒答；`cross-page-upload-limits` 的 500 页证据仍在当前 Top-5 之外；部分答案仍不完整或超出问题范围；浏览器场景 A–G 尚未实际验收；M2-02 首轮真实 PDF 探索评测已完成（5 题，标签未冻结）。结构合法与引用可定位均不等于事实正确或引用支持答案。
 - 固定评测集要求至少 30 条问题、至少 10 条不可回答，并覆盖中文问题召回英文证据、英文改写、跨页证据、部分相关候选、同关键词干扰、相似主题不同结论、不可回答、Recall@5 与 Top-1 分歧。标签先于 embedding 固定；不可回答问题不进入 Recall@K 分母。
 - 阈值扫描复用每条问题一次低阈值检索的分数，离线过滤得到 0.30–0.70 的指标，不额外调用 embedding；QA 和引用仍使用配置的默认阈值。
 - `--provider fake` 使用确定性关键词向量，只证明工程管线可运行，不能代表真实语义检索质量。
@@ -460,4 +460,5 @@ backend/.data/                 # 可由 RAG_ANCHOR_DATA_DIR 覆盖
 | M1-04   | 前端 Chunk 检索、证据问答与 PDF.js 高亮（已完成）                             |
 | M1-05   | 证据展示问答 MVP（已完成并提交）                                              |
 | M1-06   | 可选生成式问答应用侧接入、引用校验与前端模式选择（已完成；自动化 Mock + 本机 Ollama qwen3:8b 少量联调） |
-| M2-01   | 多语言语义检索 MVP：可注入 embedding、派生向量索引、语义问答与前端检索方式选择（实现完成，未提交，待人工审查） |
+| M2-01   | 多语言语义检索 MVP：可注入 embedding、派生向量索引、语义问答与前端检索方式选择（已完成并提交） |
+| M2-02   | 首轮真实 PDF 探索评测与证据选择实验；B1 保留为实验、B2 未通过验收且未启用（探索题标签未冻结） |
