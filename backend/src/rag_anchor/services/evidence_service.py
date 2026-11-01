@@ -16,15 +16,22 @@ Three distinct spaces are involved and must never be mixed:
   PDF points.
 
 The mapping is built once per page from the per-character strings returned by
-``get_text_range(index, 1)``. Empty segments (characters PDFium cannot express
-in Python, notably non-BMP code points) make the cumulative offsets
-non-strictly increasing; the mapping therefore resolves the *exact* Python span
-to the smallest PDFium range that reproduces it, and fails explicitly when a
-boundary falls inside a character that cannot be expressed. An empty segment
-strictly *inside* the resolved range is rejected as well: PDFium still reports
-a real character box for such a character, so including it would highlight a
-glyph the caller never asked for. Only empty segments before the start or after
-the end are excluded, exactly by boundary selection.
+``get_text_range(index, 1)``. PDFium stores a supplementary-plane code point as
+a UTF-16 surrogate pair: both units produce an empty per-character string, but
+the whole-page extraction decodes the pair into one Python character. The map
+therefore decodes every valid high/low surrogate pair into one Python
+character, marks the low unit as a continuation, and verifies that the
+reconstructed string equals the stored page text.
+
+A unit that produces no Python text and is not part of a valid pair (for
+example a glyph without a ``ToUnicode`` mapping) stays empty. It is skipped
+when it lies before the start or after the end of the span, and the span is
+rejected when it lies strictly inside it: PDFium still reports a real character
+box there, so including it would highlight a glyph the caller never asked for.
+Boundaries are exact; a boundary that falls inside a unit producing more than
+one Python character is rejected, and no approximate range is ever returned. A
+continuation unit belongs to its decoded character and is never treated as an
+unwanted empty unit.
 
 Index compatibility is verified read-only. The stored PDF SHA-256, the stored
 page text and the re-extracted page text must match; a different installed
@@ -36,12 +43,13 @@ stored fingerprint is never refreshed.
 from __future__ import annotations
 
 import logging
-from bisect import bisect_left, bisect_right
+from bisect import bisect_left
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
+import pypdfium2.raw as pdfium_c
 from pypdfium2 import PdfDocument, PdfiumError, PdfPage, PdfTextPage
 
 from rag_anchor.domain.models import PageDescriptor, PdfRect
@@ -134,44 +142,72 @@ class LocatedEvidence:
         )
 
 
-def build_offset_map(text_page: PdfTextPage) -> tuple[list[str], list[int]]:
-    """Return per-character strings and cumulative Python offsets.
+def build_offset_map(
+    text_page: PdfTextPage,
+) -> tuple[list[str], list[int], list[bool]]:
+    """Return per-unit strings, cumulative Python offsets and continuations.
 
-    ``segments[i]`` is what PDFium returns for character ``i``. It may be the
-    empty string when the engine's character cannot be represented in Python
-    (for example a supplementary-plane code point). ``offsets`` always has
-    ``len(segments) + 1`` entries; ``offsets[0] == 0`` and
-    ``offsets[-1] == len("".join(segments))``.
+    ``segments[i]`` is the Python text produced by PDFium character unit ``i``.
+    A supplementary-plane code point occupies two units, for which
+    ``get_text_range(i, 1)`` returns the empty string twice while the
+    whole-page extraction decodes the pair into one Python character. A valid
+    pair is decoded here into ``segments[i]`` plus an empty ``segments[i + 1]``;
+    ``continuations[i + 1]`` is ``True`` so the low surrogate is not mistaken
+    for a unit that produces no text.
+
+    A unit that yields no text and is not a valid surrogate pair (for example a
+    glyph without a ``ToUnicode`` mapping) keeps the empty string and is not a
+    continuation. ``offsets`` always has ``len(segments) + 1`` entries;
+    ``offsets[0] == 0`` and ``offsets[-1] == len("".join(segments))``.
     """
     count = text_page.count_chars()
     segments: list[str] = []
+    continuations: list[bool] = []
     offsets: list[int] = [0]
     total = 0
-    for index in range(count):
+    index = 0
+    while index < count:
         segment = text_page.get_text_range(index, 1)
+        if segment == "" and index + 1 < count:
+            high = pdfium_c.FPDFText_GetUnicode(text_page, index)
+            low = pdfium_c.FPDFText_GetUnicode(text_page, index + 1)
+            if 0xD800 <= high <= 0xDBFF and 0xDC00 <= low <= 0xDFFF:
+                segment = chr(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00))
+                segments.extend((segment, ""))
+                continuations.extend((False, True))
+                total += len(segment)
+                offsets.extend((total, total))
+                index += 2
+                continue
+
         segments.append(segment)
+        continuations.append(False)
         total += len(segment)
         offsets.append(total)
-    return segments, offsets
+        index += 1
+    return segments, offsets, continuations
 
 
 def map_python_span(
     offsets: Sequence[int],
     match_start: int,
     match_end: int,
+    continuations: Sequence[bool] | None = None,
 ) -> tuple[int, int]:
     """Map a Python span to the PDFium character range ``[start, end)``.
 
-    The start boundary is resolved to the *last* index whose cumulative offset
-    equals ``match_start`` so that leading empty characters are excluded. The
-    end boundary is resolved to the *first* index whose cumulative offset
-    equals ``match_end`` so that trailing empty characters are excluded.
+    The start boundary skips every unit that contributes no Python text, so
+    both leading unmapped characters and the low surrogate of a preceding
+    supplementary character are excluded. The end boundary stops before a
+    genuinely unmapped unit, but keeps the low surrogate of a supplementary
+    character included in the span. ``continuations`` marks those low
+    surrogates; when omitted, no unit is treated as a continuation.
 
     Raises ``EvidenceValidationError`` when the span is outside the text and
     ``EvidenceMappingError`` when a boundary falls inside a character that
     produces more than one Python character (or otherwise has no exact
-    boundary), or when an unrepresentable character (an empty segment) lies
-    strictly inside the resolved range. No approximate range is ever returned.
+    boundary), or when a unit that produces no text lies strictly inside the
+    resolved range. No approximate range is ever returned.
     """
     if match_start < 0:
         raise EvidenceValidationError("match_start must be zero or greater")
@@ -182,8 +218,18 @@ def map_python_span(
     if match_end > offsets[-1]:
         raise EvidenceValidationError("span is outside the stored page text")
 
-    start_index = bisect_right(offsets, match_start) - 1
-    if start_index < 0 or offsets[start_index] != match_start:
+    unit_count = len(offsets) - 1
+    if continuations is None:
+        continuations = [False] * unit_count
+
+    start_index = bisect_left(offsets, match_start)
+    while (
+        start_index < unit_count
+        and offsets[start_index] == match_start
+        and offsets[start_index + 1] == match_start
+    ):
+        start_index += 1
+    if start_index >= len(offsets) or offsets[start_index] != match_start:
         raise EvidenceMappingError(
             "match_start falls inside a character PDFium cannot express exactly"
         )
@@ -193,16 +239,20 @@ def map_python_span(
         raise EvidenceMappingError(
             "match_end falls inside a character PDFium cannot express exactly"
         )
+    while end_index < unit_count and continuations[end_index] and offsets[end_index] == match_end:
+        end_index += 1
     if end_index <= start_index:
         raise EvidenceMappingError("span cannot be mapped to a non-empty character range")
-    if any(offsets[index] == offsets[index + 1] for index in range(start_index, end_index)):
-        # An empty segment inside the range means PDFium still has a character
-        # there, but it contributes no Python text. Its real character box
-        # would be highlighted even though the caller never asked for it.
-        raise EvidenceMappingError(
-            "span contains a PDFium character that produces no text; "
-            "exact geometry cannot be proven"
-        )
+    for index in range(start_index, end_index):
+        if offsets[index] == offsets[index + 1] and not continuations[index]:
+            # An unmapped unit inside the range means PDFium still has a
+            # character there, but it contributes no Python text. Its real
+            # character box would be highlighted even though the caller never
+            # asked for it.
+            raise EvidenceMappingError(
+                "span contains a PDFium character that produces no text; "
+                "exact geometry cannot be proven"
+            )
     return start_index, end_index
 
 
@@ -237,6 +287,7 @@ class _PageGeometry:
     text_page: PdfTextPage
     segments: list[str]
     offsets: list[int]
+    continuations: list[bool]
 
     def close(self) -> None:
         """Release the PDFium page and text page."""
@@ -423,7 +474,7 @@ class EvidenceLocationService:
             raise EvidenceSourceError("Stored PDF page could not be read") from exc
 
         try:
-            segments, offsets = build_offset_map(text_page)
+            segments, offsets, continuations = build_offset_map(text_page)
             if "".join(segments) != stored_text:
                 raise EvidenceIndexMismatchError(
                     "Current page text does not match the stored index"
@@ -439,6 +490,7 @@ class EvidenceLocationService:
             text_page=text_page,
             segments=segments,
             offsets=offsets,
+            continuations=continuations,
         )
 
     def _locate_one(
@@ -453,6 +505,7 @@ class EvidenceLocationService:
             geometry.offsets,
             span.match_start,
             span.match_end,
+            geometry.continuations,
         )
         char_count = char_end - char_start
 

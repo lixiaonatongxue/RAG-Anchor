@@ -9,10 +9,13 @@ persisted index rather than a hand-built repository fixture.
 from __future__ import annotations
 
 import dataclasses
+import io
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import DecodedStreamObject, NameObject
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
@@ -51,6 +54,51 @@ def _non_bmp_font() -> str:
             pdfmetrics.registerFont(TTFont(name, str(candidate)))
         return name
     pytest.skip("No font with supplementary-plane coverage is available")
+
+
+_SUPPLEMENTARY_CMAP = b"""/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Adobe-Identity-UCS def
+/CMapType 2 def
+1 begincodespacerange
+<00> <FF>
+endcodespacerange
+1 beginbfchar
+<41> <D835DC39>
+endbfchar
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end
+"""
+
+
+def _map_a_to_supplementary_glyph(path: Path) -> Path:
+    """Make every ``A`` extract as U+1D439 (a supplementary code point).
+
+    reportlab truncates supplementary characters, so the fixture draws ordinary
+    ``A`` glyphs and attaches a ``ToUnicode`` CMap that maps the ``A`` code to
+    the UTF-16 surrogate pair. PDFium then exposes a real two-unit
+    supplementary character with normal geometry.
+    """
+    reader = PdfReader(str(path))
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    stream = DecodedStreamObject()
+    stream.set_data(_SUPPLEMENTARY_CMAP)
+    for page in writer.pages:
+        fonts = page["/Resources"]["/Font"]
+        for key in fonts:
+            font = fonts[key].get_object()
+            if "Helvetica" in str(font.get("/BaseFont")):
+                font[NameObject("/ToUnicode")] = writer._add_object(stream)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    path.write_bytes(buffer.getvalue())
+    return path
 
 
 def _upload(client, path: Path) -> UUID:
@@ -213,6 +261,85 @@ def test_non_bmp_inside_the_span_is_rejected(api, pdf_factory) -> None:
         _service(api).locate(document_id, [span])
 
 
+def test_supplementary_character_is_located(api, pdf_factory) -> None:
+    path = _map_a_to_supplementary_glyph(
+        pdf_factory("supplementary.pdf", [[(100.0, 700.0, "A quick fox")]])
+    )
+    document_id = _prepare(api, path)
+    assert _page_text(api, document_id, 0) == "\U0001d439 quick fox"
+
+    item = _locate_one(api, document_id, 0, "quick")
+
+    assert item.match_start == 2
+    assert item.char_start == 3
+    assert item.char_count == 5
+    assert item.matched_text == "quick"
+    assert item.rects
+
+
+def test_supplementary_character_itself_is_located(api, pdf_factory) -> None:
+    path = _map_a_to_supplementary_glyph(
+        pdf_factory("supplementary_span.pdf", [[(100.0, 700.0, "A quick fox")]])
+    )
+    document_id = _prepare(api, path)
+
+    item = _locate_one(api, document_id, 0, "\U0001d439")
+
+    assert item.match_start == 0
+    assert item.match_end == 1
+    assert item.char_start == 0
+    assert item.char_count == 2
+    assert item.matched_text == "\U0001d439"
+    assert item.rects
+
+
+def test_span_ending_after_supplementary_character_keeps_both_units(api, pdf_factory) -> None:
+    path = _map_a_to_supplementary_glyph(
+        pdf_factory("supplementary_trailing.pdf", [[(100.0, 700.0, "A quick fox")]])
+    )
+    document_id = _prepare(api, path)
+
+    item = _locate_one(api, document_id, 0, "\U0001d439 ")
+
+    assert item.match_start == 0
+    assert item.match_end == 2
+    assert item.char_start == 0
+    assert item.char_count == 3
+    assert item.matched_text == "\U0001d439 "
+    assert item.rects
+
+
+def test_legacy_supplementary_prefix_seed_locates(api, pdf_factory) -> None:
+    """Reproduce the E2-Q1 shape: supplementary prefixes shift PDFium indices."""
+    path = _map_a_to_supplementary_glyph(
+        pdf_factory(
+            "legacy_supplementary_seed.pdf",
+            [[(100.0, 700.0, "AAAAA quick fox")]],
+        )
+    )
+    document_id = _prepare(api, path)
+    text = _page_text(api, document_id, 0)
+    assert text == "\U0001d439\U0001d439\U0001d439\U0001d439\U0001d439 quick fox"
+    assert text.index("quick") == 6
+
+    item = _locate_one(api, document_id, 0, "quick")
+
+    assert item.match_start == 6
+    assert item.char_start == 11
+    assert item.char_count == 5
+    assert item.matched_text == "quick"
+    assert item.rects
+
+
+def test_span_with_spaces_skips_zero_area_boxes(api, single_page_pdf: Path) -> None:
+    document_id = _prepare(api, single_page_pdf)
+
+    item = _locate_one(api, document_id, 0, "quick brown")
+
+    assert item.rects
+    assert all(rect.right > rect.left and rect.top > rect.bottom for rect in item.rects)
+
+
 def test_continuous_range_mismatch_is_rejected() -> None:
     class RewritingTextPage:
         """Stand-in for PDFium rewriting text when a range is requested."""
@@ -236,6 +363,16 @@ def test_map_python_span_rejects_a_boundary_inside_one_unit() -> None:
         map_python_span(offsets, 0, 1)
     with pytest.raises(EvidenceMappingError, match="empty offset map"):
         map_python_span([], 0, 1)
+
+
+def test_map_python_span_handles_supplementary_continuation_units() -> None:
+    # U+1D439 then " quick" as units: high, low (continuation), space, q, u, i, c, k.
+    offsets = [0, 1, 1, 2, 3, 4, 5, 6, 7]
+    continuations = [False, True, False, False, False, False, False, False]
+
+    assert map_python_span(offsets, 0, 1, continuations) == (0, 2)
+    assert map_python_span(offsets, 1, 2, continuations) == (2, 3)
+    assert map_python_span(offsets, 2, 7, continuations) == (3, 8)
 
 
 def test_map_python_span_validates_the_requested_range() -> None:
@@ -613,13 +750,13 @@ def test_boundary_inside_a_multi_character_unit_fails_explicitly(
     original_map = evidence_module.build_offset_map
 
     def merged_map(text_page):
-        segments, _ = original_map(text_page)
+        segments, _, _ = original_map(text_page)
         segments[merge_at] = segments[merge_at] + segments[merge_at + 1]
         segments[merge_at + 1] = ""
         offsets = [0]
         for segment in segments:
             offsets.append(offsets[-1] + len(segment))
-        return segments, offsets
+        return segments, offsets, [False] * len(segments)
 
     monkeypatch.setattr(evidence_module, "build_offset_map", merged_map)
     span = EvidenceSpan(0, merge_at, merge_at + 1, text[merge_at])
