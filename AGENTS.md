@@ -4,14 +4,14 @@
 
 ## 项目概述
 
-RAG-AnchorLab 是开源的 PDF 证据定位与可视化工具。
+RAG-AnchorLab 是 PDF 证据定位与可视化工具。
 
-核心流程：上传 PDF → 输入证据文字 → 后端检索原文 → 返回页码与精确几何坐标（quads/bbox）→ PDF.js 前端高亮。
+核心流程：上传 PDF → 建立页面文本与 Chunk 索引 → 字面/语义检索 →（可选）模型基于检索证据回答 → 服务端校验引用 → `evidence/locate` 返回真实 PDF 坐标 → PDF.js 高亮。
 
-核心后端 API（规划）：
+核心后端 API（已实现）：
 
 ```python
-search_anchors(pdf_path, query, match_mode="exact") -> list[AnchorHit]
+search_anchors(pdf_path, query, *, match_case=True) -> list[AnchorHit]
 ```
 
 必须正确处理：**零命中、单命中、多命中**，返回全部匹配位置。
@@ -21,7 +21,7 @@ search_anchors(pdf_path, query, match_mode="exact") -> list[AnchorHit]
 - `backend/`：**独立 uv 项目**，依赖边界是 `backend/pyproject.toml`。
 - `docs/`：架构与 ADR。
 - 仓库根目录**不创建** Python 项目、`.venv` 或 `pyproject.toml`。
-- 前端目录 `frontend/` 在后续阶段引入。
+- 前端目录 `frontend/` 已实现 PDF.js 阅读、字面/语义检索、问答与引用定位。
 
 ## Python 环境规则（强制）
 
@@ -35,7 +35,9 @@ search_anchors(pdf_path, query, match_mode="exact") -> list[AnchorHit]
 
 ## 技术约束
 
-- 第一版**不引入**：LLM、向量数据库、embedding、OCR、PyTorch、CUDA、GPU。
+- 已实现可选能力：OpenAI 兼容服务的生成式问答（默认关闭，联调使用 Qwen3）与 Ollama `bge-m3` 语义检索（默认关闭），均通过 HTTP 调用；不引入外部向量数据库。
+- 当前仍**不引入**：OCR、PyTorch、CUDA、GPU。
+- 生产默认证据选择策略为 `legacy`；`neighbor_v1` 仅为实验可选策略；B2 `context_window_v1` 已归档，不属于产品功能。
 - PDF 引擎优先 `pypdfium2`（已安装，M0-02 技术验证已完成）。
 - PyMuPDF 在许可证确认前**不安装**。
 - 不创建尚未使用的空模块或过度抽象。
