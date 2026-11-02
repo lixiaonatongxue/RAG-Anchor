@@ -164,7 +164,7 @@ y_norm = (y_abs - cropbox.bottom) / page_height_pt
 约束：
 
 - 发布前必须从实际安装的 wheel 中提取并保留 PDFium 及其第三方组件的完整许可文本；本阶段尚未生成该清单。
-- 项目最终许可证（MIT / Apache-2.0 等）尚未确定，当前不创建 `LICENSE` 文件。
+- 项目已采用 MIT License（见仓库根目录 `LICENSE`）；第三方组件仍按各自许可证授权。若重新分发包含 PDFium 的二进制包，需按实际要求保留其许可与通知文件。
 - PyMuPDF 在许可证确认前不安装。
 
 ## 示例（示意，非最终 schema）

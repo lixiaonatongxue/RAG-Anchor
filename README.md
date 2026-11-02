@@ -262,6 +262,12 @@ uv lock --check
 - [后端说明](backend/README.md)
 - [English README](README.en.md)
 
-## License
+## 开源许可证
 
-MIT 许可证准备中；当前仓库尚未包含 `LICENSE` 文件，正式版权署名待确认。在许可证文件正式落地前，不将本项目表述为已采用 MIT 许可。
+本项目采用 [MIT License](LICENSE)。
+
+Copyright (c) 2026 [lixiaonatongxue](https://github.com/lixiaonatongxue)。
+
+第三方依赖仍按各自许可证授权；本项目采用 MIT 不会改变第三方组件的许可条件。若重新分发包含 PDFium 等原生库的二进制包，需按实际要求保留其许可与通知文件。
+
+本项目目前没有完整的用户认证、公网限流与审计能力，不建议直接将当前服务作为承载敏感 PDF 的公网服务部署。MIT 许可证不代表当前应用已经满足生产安全部署要求。

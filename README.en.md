@@ -264,4 +264,10 @@ Automated tests use injected Fake/Mock providers and make no real model requests
 
 ## License
 
-The MIT license is being prepared; the repository does not yet contain a `LICENSE` file, and the formal copyright attribution is pending. Until the license file is in place, the project is not represented as MIT-licensed.
+This project is licensed under the [MIT License](LICENSE).
+
+Copyright (c) 2026 [lixiaonatongxue](https://github.com/lixiaonatongxue).
+
+Third-party dependencies remain subject to their respective licenses; adopting MIT for this project does not change their license terms. If you redistribute binary packages that bundle native libraries such as PDFium, retain the applicable license and notice files.
+
+This project does not yet provide complete user authentication, public rate limiting, or auditing. Do not deploy the current service directly as a public service holding sensitive PDFs. The MIT license does not mean the application meets production security requirements.
