@@ -94,7 +94,7 @@ describe("computeChunkPage", () => {
 describe("chunkEmptyMessage", () => {
   it("reports the searching state first", () => {
     expect(chunkEmptyMessage({ searching: true, hasSearched: false })).toBe(
-      "正在检索 Chunk…"
+      "正在检索…"
     );
   });
 
@@ -106,7 +106,7 @@ describe("chunkEmptyMessage", () => {
 
   it("gives the idle instruction before any search", () => {
     expect(chunkEmptyMessage({ searching: false, hasSearched: false })).toBe(
-      "检索后，命中的 Chunk 会按页码列在这里。"
+      "暂无结果"
     );
   });
 });

@@ -5,49 +5,67 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="RAG-Anchor：上传 PDF，输入证据文字，精确高亮所有命中位置。"
+      content="RAG-Anchor：在 PDF 原文中检索证据、提问并定位引用。"
     />
-    <title>RAG-Anchor · PDF Evidence Explorer</title>
+    <title>RAG-Anchor</title>
   </head>
   <body>
     <div class="app">
-      <header class="app-header">
-        <div class="brand">
-          <span class="brand-mark" aria-hidden="true">
+      <aside
+        class="sidebar library-pane"
+        id="library-pane"
+        aria-label="文献库"
+      >
+        <header class="library-header">
+          <div class="brand">
+            <span class="brand-mark" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+              >
+                <path d="M12 3v7" stroke-linecap="round" />
+                <circle cx="12" cy="12" r="2.4" />
+                <path d="M12 14.4V21" stroke-linecap="round" />
+                <path
+                  d="M6 8.5a7.2 7.2 0 0 0-2.4 5.4A8.4 8.4 0 0 0 12 22a8.4 8.4 0 0 0 8.4-8.1A7.2 7.2 0 0 0 18 8.5"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </span>
+            <h1 class="brand-name">RAG-Anchor</h1>
+          </div>
+          <div class="connection" id="connection-status" data-state="idle">
+            <span class="connection-dot" aria-hidden="true"></span>
+            <span id="connection-label">正在连接…</span>
+          </div>
+          <button
+            class="icon-button drawer-close"
+            id="library-close"
+            type="button"
+            title="关闭文献库"
+            aria-label="关闭文献库"
+          >
             <svg
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
               stroke-width="1.8"
             >
-              <path d="M12 3v7" stroke-linecap="round" />
-              <circle cx="12" cy="12" r="2.4" />
-              <path d="M12 14.4V21" stroke-linecap="round" />
-              <path
-                d="M6 8.5a7.2 7.2 0 0 0-2.4 5.4A8.4 8.4 0 0 0 12 22a8.4 8.4 0 0 0 8.4-8.1A7.2 7.2 0 0 0 18 8.5"
-                stroke-linecap="round"
-              />
+              <path d="m6 6 12 12M18 6 6 18" stroke-linecap="round" />
             </svg>
-          </span>
-          <div class="brand-text">
-            <h1>RAG-Anchor</h1>
-            <p>PDF Evidence Explorer</p>
-          </div>
-        </div>
-        <div class="connection" id="connection-status" data-state="idle">
-          <span class="connection-dot" aria-hidden="true"></span>
-          <span id="connection-label">正在连接后端…</span>
-        </div>
-      </header>
+          </button>
+        </header>
 
-      <main class="workspace">
-        <aside class="sidebar" aria-label="文档与搜索">
+        <div class="library-scroll">
           <section class="panel upload-panel">
-            <div class="panel-heading">
-              <h2>上传文档</h2>
-              <span class="panel-hint">PDF · ≤ 20 MB</span>
-            </div>
-            <label class="upload-zone" id="upload-zone" for="upload-input">
+            <label
+              class="upload-zone"
+              id="upload-zone"
+              for="upload-input"
+              title="支持 PDF，最大 20 MB"
+            >
               <input
                 id="upload-input"
                 type="file"
@@ -73,8 +91,7 @@
                   />
                 </svg>
               </span>
-              <span class="upload-title">拖放 PDF 到这里，或点击选择</span>
-              <span class="upload-sub">文件仅保存在本机后端</span>
+              <span class="upload-title">上传 PDF</span>
             </label>
             <p
               class="upload-status"
@@ -86,219 +103,336 @@
 
           <section class="panel documents-panel">
             <div class="panel-heading">
-              <h2>文档库</h2>
+              <h2>文献库</h2>
               <span class="count-badge" id="document-count">0</span>
             </div>
             <div class="document-list" id="document-list"></div>
           </section>
 
-          <section class="panel chunk-panel" aria-label="索引与 Chunk 检索">
-            <div class="panel-heading">
-              <h2>Chunk 检索</h2>
-              <span class="panel-hint" id="index-status">未索引</span>
-            </div>
-            <div class="index-row">
-              <button
-                class="ghost-button"
-                id="index-button"
-                type="button"
-                disabled
+          <details class="panel chunk-panel" aria-label="Chunk 检索">
+            <summary class="chunk-summary">
+              <span>Chunk 检索</span>
+              <svg
+                class="summary-chevron"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.9"
+                aria-hidden="true"
               >
-                建立索引
-              </button>
-              <span class="panel-hint" id="index-detail"
-                >选择一个文档后可建立索引。</span
-              >
-            </div>
-            <form class="search-form" id="chunk-form">
-              <label class="field-label" for="chunk-input"
-                >字面匹配（非语义检索）</label
-              >
-              <textarea
-                id="chunk-input"
-                rows="2"
-                placeholder="输入字面文字，例如：quick"
-                spellcheck="false"
-              ></textarea>
-              <div class="search-controls">
-                <label class="checkbox">
-                  <input id="chunk-match-case" type="checkbox" checked />
-                  <span>区分大小写</span>
-                </label>
-                <button
-                  class="primary-button"
-                  id="chunk-search-button"
-                  type="submit"
-                  disabled
-                >
-                  检索
-                </button>
-              </div>
-            </form>
-            <p class="search-hint" id="chunk-hint">请先选择一个文档。</p>
-            <div class="results-toolbar">
-              <span id="chunk-position">0 / 0</span>
-              <div class="hit-nav">
-                <button
-                  class="icon-button"
-                  id="chunk-prev"
-                  type="button"
-                  title="上一页结果"
-                  aria-label="上一页结果"
-                  disabled
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.9"
+                <path
+                  d="m8 10 4 4 4-4"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </summary>
+            <div class="chunk-body">
+              <form class="search-form" id="chunk-form">
+                <textarea
+                  id="chunk-input"
+                  rows="2"
+                  placeholder="输入原文词句…"
+                  spellcheck="false"
+                ></textarea>
+                <div class="search-controls">
+                  <label class="checkbox">
+                    <input id="chunk-match-case" type="checkbox" checked />
+                    <span>区分大小写</span>
+                  </label>
+                  <button
+                    class="primary-button"
+                    id="chunk-search-button"
+                    type="submit"
+                    disabled
                   >
-                    <path
-                      d="m6 14 6-6 6 6"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </button>
-                <button
-                  class="icon-button"
-                  id="chunk-next"
-                  type="button"
-                  title="下一页结果"
-                  aria-label="下一页结果"
-                  disabled
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.9"
+                    检索
+                  </button>
+                </div>
+              </form>
+              <p class="search-hint" id="chunk-hint"></p>
+              <div class="results-toolbar">
+                <span class="results-position" id="chunk-position">0 / 0</span>
+                <div class="hit-nav">
+                  <button
+                    class="icon-button"
+                    id="chunk-prev"
+                    type="button"
+                    title="上一页结果"
+                    aria-label="上一页结果"
+                    disabled
                   >
-                    <path
-                      d="m6 10 6 6 6-6"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </button>
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.9"
+                    >
+                      <path
+                        d="m14 6-6 6 6 6"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                  </button>
+                  <button
+                    class="icon-button"
+                    id="chunk-next"
+                    type="button"
+                    title="下一页结果"
+                    aria-label="下一页结果"
+                    disabled
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.9"
+                    >
+                      <path
+                        d="m10 6 6 6-6 6"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                  </button>
+                </div>
               </div>
+              <div class="results-list chunk-results" id="chunk-results"></div>
             </div>
-            <div class="results-list chunk-results" id="chunk-results"></div>
-          </section>
+          </details>
+        </div>
 
-          <section class="panel qa-panel" aria-label="证据问答">
-            <div class="panel-heading">
-              <h2>证据问答</h2>
-              <span class="panel-hint">证据展示 / AI 生成 · 引用校验</span>
-            </div>
-            <div class="index-row">
+        <footer class="library-footer">
+          <div class="panel-heading">
+            <h2>索引</h2>
+            <span class="status-badge" id="index-status">未索引</span>
+          </div>
+          <div class="index-row">
+            <button
+              class="ghost-button"
+              id="index-button"
+              type="button"
+              aria-describedby="index-detail"
+              disabled
+            >
+              建立索引
+            </button>
+            <span class="panel-hint" id="index-detail"></span>
+          </div>
+          <div class="index-row">
+            <button
+              class="ghost-button"
+              id="semantic-index-button"
+              type="button"
+              aria-describedby="semantic-index-detail"
+              disabled
+            >
+              建立语义索引
+            </button>
+            <span class="panel-hint" id="semantic-index-detail"></span>
+          </div>
+        </footer>
+      </aside>
+
+      <main class="viewer-pane" aria-label="PDF 阅读器">
+        <header class="viewer-toolbar">
+          <button
+            class="icon-button pane-toggle"
+            id="library-toggle"
+            type="button"
+            title="打开文献库"
+            aria-label="打开文献库"
+            aria-controls="library-pane"
+            aria-expanded="false"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+            >
+              <path d="M4 6h16M4 12h16M4 18h16" stroke-linecap="round" />
+            </svg>
+          </button>
+
+          <div class="viewer-doc">
+            <h2 id="viewer-title" title="未选择文档">未选择文档</h2>
+            <p id="viewer-subtitle"></p>
+          </div>
+
+          <div class="viewer-controls">
+            <div class="control-group" aria-label="页码控制">
               <button
-                class="ghost-button"
-                id="semantic-index-button"
+                class="icon-button"
+                id="prev-page"
                 type="button"
+                title="上一页"
+                aria-label="上一页"
                 disabled
               >
-                建立语义索引
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.9"
+                >
+                  <path
+                    d="m14 6-6 6 6 6"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
               </button>
-              <span class="panel-hint" id="semantic-index-detail"
-                >语义检索需要单独建立向量索引。</span
-              >
-            </div>
-            <form class="search-form" id="qa-form">
-              <label class="field-label" for="qa-retrieval-mode">检索方式</label>
-              <select class="qa-mode" id="qa-retrieval-mode">
-                <option value="literal" selected>关键词（字面匹配）</option>
-                <option value="semantic">语义（需先建立语义索引）</option>
-              </select>
-              <label class="field-label" for="qa-mode">回答模式</label>
-              <select class="qa-mode" id="qa-mode">
-                <option value="evidence_only" selected>
-                  证据展示（不调用语言模型）
-                </option>
-                <option value="grounded_generation">
-                  AI 生成回答（需已配置模型服务）
-                </option>
-              </select>
-              <label class="field-label" for="qa-question">问题</label>
-              <textarea
-                id="qa-question"
-                rows="2"
-                placeholder="例如：论文提出的方法有哪些特点？"
-                spellcheck="false"
-              ></textarea>
-              <label class="field-label" for="qa-query"
-                >检索文本（仅关键词模式，可选；默认使用问题原文）</label
-              >
               <input
-                class="qa-query"
-                id="qa-query"
-                type="text"
-                placeholder="关键词模式可填写文档原文词句；语义模式直接使用问题原文"
-                spellcheck="false"
+                class="page-input"
+                id="page-input"
+                type="number"
+                min="1"
+                value="1"
+                aria-label="当前页码"
+                disabled
               />
-              <div class="qa-controls">
-                <span class="panel-hint" id="qa-mode-note"
-                  >不调用语言模型，仅返回原文证据</span
+              <span class="page-total">/ <span id="page-total">0</span></span>
+              <button
+                class="icon-button"
+                id="next-page"
+                type="button"
+                title="下一页"
+                aria-label="下一页"
+                disabled
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.9"
                 >
-                <button
-                  class="primary-button"
-                  id="qa-submit"
-                  type="submit"
-                  disabled
-                >
-                  提问
-                </button>
-              </div>
-            </form>
-            <p class="search-hint" id="qa-hint">
-              请先选择一个文档并建立索引。
-            </p>
-            <div class="qa-answer" id="qa-answer" hidden aria-live="polite">
-              <p class="qa-answer-mode" id="qa-answer-mode">
-                证据展示模式 · 未接入语言模型
-              </p>
-              <p class="qa-answer-text" id="qa-answer-text"></p>
+                  <path
+                    d="m10 6 6 6-6 6"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
             </div>
-            <div class="qa-citations" id="qa-citations"></div>
-          </section>
 
-          <section class="panel search-panel">
-            <div class="panel-heading">
-              <h2>证据搜索</h2>
-            </div>
-            <form class="search-form" id="search-form">
-              <label class="field-label" for="search-input">证据文字</label>
-              <textarea
-                id="search-input"
-                rows="2"
-                placeholder="输入要定位的原文片段，例如：The quick brown fox"
-                spellcheck="false"
-              ></textarea>
-              <div class="search-controls">
-                <label class="checkbox">
-                  <input id="match-case" type="checkbox" checked />
-                  <span>区分大小写</span>
-                </label>
-                <button
-                  class="primary-button"
-                  id="search-button"
-                  type="submit"
-                  disabled
+            <div class="control-group" aria-label="缩放控制">
+              <button
+                class="icon-button"
+                id="zoom-out"
+                type="button"
+                title="缩小"
+                aria-label="缩小"
+                disabled
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.9"
                 >
-                  搜索
-                </button>
-              </div>
-            </form>
-            <p class="search-hint" id="search-hint">请先选择一个文档。</p>
-          </section>
+                  <path d="M6 12h12" stroke-linecap="round" />
+                </svg>
+              </button>
+              <span class="zoom-label" id="zoom-label">100%</span>
+              <button
+                class="icon-button"
+                id="zoom-in"
+                type="button"
+                title="放大"
+                aria-label="放大"
+                disabled
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.9"
+                >
+                  <path d="M12 6v12M6 12h12" stroke-linecap="round" />
+                </svg>
+              </button>
+              <button
+                class="ghost-button"
+                id="fit-width"
+                type="button"
+                title="适合宽度"
+                disabled
+              >
+                适合宽度
+              </button>
+            </div>
+          </div>
 
-          <section class="panel results-panel">
+          <button
+            class="icon-button pane-toggle"
+            id="inspector-toggle"
+            type="button"
+            title="打开问答"
+            aria-label="打开问答"
+            aria-controls="inspector-pane"
+            aria-expanded="false"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+            >
+              <path d="M5 5h14v11H9l-4 3V5Z" stroke-linejoin="round" />
+              <path d="M9 9h6M9 12h4" stroke-linecap="round" />
+            </svg>
+          </button>
+        </header>
+
+        <div class="find-bar">
+          <form class="find-form" id="search-form">
+            <span class="find-icon" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+              >
+                <circle cx="11" cy="11" r="6.5" />
+                <path d="m16 16 4 4" stroke-linecap="round" />
+              </svg>
+            </span>
+            <textarea
+              id="search-input"
+              rows="1"
+              placeholder="在原文中查找…"
+              spellcheck="false"
+            ></textarea>
+            <label class="checkbox">
+              <input id="match-case" type="checkbox" checked />
+              <span>区分大小写</span>
+            </label>
+            <button
+              class="primary-button"
+              id="search-button"
+              type="submit"
+              disabled
+            >
+              搜索
+            </button>
+          </form>
+          <p class="search-hint" id="search-hint"></p>
+        </div>
+
+        <section
+          class="panel results-panel search-results"
+          id="search-results"
+          aria-label="命中结果"
+        >
+          <div class="results-head">
             <div class="panel-heading">
               <h2>命中结果</h2>
               <span class="count-badge" id="result-count">0</span>
             </div>
             <div class="results-toolbar">
-              <span id="hit-position">—</span>
+              <span class="results-position" id="hit-position">—</span>
               <div class="hit-nav">
                 <button
                   class="icon-button"
@@ -315,7 +449,7 @@
                     stroke-width="1.9"
                   >
                     <path
-                      d="m6 14 6-6 6 6"
+                      d="m14 6-6 6 6 6"
                       stroke-linecap="round"
                       stroke-linejoin="round"
                     />
@@ -336,73 +470,6 @@
                     stroke-width="1.9"
                   >
                     <path
-                      d="m6 10 6 6 6-6"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div class="results-list" id="results-list"></div>
-          </section>
-        </aside>
-
-        <section class="viewer-pane" aria-label="PDF 阅读器">
-          <div class="viewer-toolbar">
-            <div class="viewer-doc">
-              <h2 id="viewer-title">未选择文档</h2>
-              <p id="viewer-subtitle">从左侧文档库选择一个 PDF 开始</p>
-            </div>
-
-            <div class="viewer-controls">
-              <div class="control-group" aria-label="页码控制">
-                <button
-                  class="icon-button"
-                  id="prev-page"
-                  type="button"
-                  title="上一页"
-                  aria-label="上一页"
-                  disabled
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.9"
-                  >
-                    <path
-                      d="m14 6-6 6 6 6"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </button>
-                <input
-                  class="page-input"
-                  id="page-input"
-                  type="number"
-                  min="1"
-                  value="1"
-                  aria-label="当前页码"
-                  disabled
-                />
-                <span class="page-total">/ <span id="page-total">0</span></span>
-                <button
-                  class="icon-button"
-                  id="next-page"
-                  type="button"
-                  title="下一页"
-                  aria-label="下一页"
-                  disabled
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.9"
-                  >
-                    <path
                       d="m10 6 6 6-6 6"
                       stroke-linecap="round"
                       stroke-linejoin="round"
@@ -410,108 +477,146 @@
                   </svg>
                 </button>
               </div>
-
-              <div class="control-group" aria-label="缩放控制">
-                <button
-                  class="icon-button"
-                  id="zoom-out"
-                  type="button"
-                  title="缩小"
-                  aria-label="缩小"
-                  disabled
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.9"
-                  >
-                    <path d="M6 12h12" stroke-linecap="round" />
-                  </svg>
-                </button>
-                <span class="zoom-label" id="zoom-label">100%</span>
-                <button
-                  class="icon-button"
-                  id="zoom-in"
-                  type="button"
-                  title="放大"
-                  aria-label="放大"
-                  disabled
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.9"
-                  >
-                    <path d="M12 6v12M6 12h12" stroke-linecap="round" />
-                  </svg>
-                </button>
-                <button
-                  class="ghost-button"
-                  id="fit-width"
-                  type="button"
-                  title="适合宽度"
-                  disabled
-                >
-                  适合宽度
-                </button>
-              </div>
             </div>
           </div>
-
-          <div class="viewer-stage" id="viewer-stage">
-            <div class="viewer-empty" id="viewer-empty">
-              <span class="empty-illustration" aria-hidden="true">
-                <svg
-                  viewBox="0 0 64 64"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                >
-                  <path d="M16 8h22l10 10v38H16V8Z" stroke-linejoin="round" />
-                  <path d="M38 8v10h10" stroke-linejoin="round" />
-                  <path
-                    d="M23 30h18M23 38h18M23 46h11"
-                    stroke-linecap="round"
-                  />
-                  <circle cx="41" cy="46" r="7" fill="var(--surface)" />
-                  <path d="m46 51 6 6" stroke-linecap="round" />
-                </svg>
-              </span>
-              <p class="empty-title">等待载入 PDF</p>
-              <p class="empty-copy">
-                选择左侧文档后，页面会在这里渲染；搜索命中将以高亮覆盖在原文上。
-              </p>
-            </div>
-
-            <div class="viewer-loading" id="viewer-loading" hidden>
-              <span class="spinner" aria-hidden="true"></span>
-              <span>正在加载 PDF…</span>
-            </div>
-
-            <div class="viewer-error" id="viewer-error" hidden>
-              <p class="error-title">PDF 加载失败</p>
-              <p class="error-copy" id="viewer-error-message"></p>
-            </div>
-
-            <div class="page-shell" id="page-shell" hidden>
-              <canvas id="pdf-canvas"></canvas>
-              <div
-                class="highlight-layer"
-                id="highlight-layer"
-                aria-hidden="true"
-              ></div>
-            </div>
-          </div>
+          <div class="results-list" id="results-list"></div>
         </section>
+
+        <div class="viewer-stage" id="viewer-stage">
+          <div class="viewer-empty" id="viewer-empty">
+            <span class="empty-illustration" aria-hidden="true">
+              <svg
+                viewBox="0 0 64 64"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+              >
+                <path d="M16 8h22l10 10v38H16V8Z" stroke-linejoin="round" />
+                <path d="M38 8v10h10" stroke-linejoin="round" />
+                <path d="M23 30h18M23 38h18M23 46h11" stroke-linecap="round" />
+                <circle cx="41" cy="46" r="7" fill="var(--surface-2)" />
+                <path d="m46 51 6 6" stroke-linecap="round" />
+              </svg>
+            </span>
+            <p class="empty-title">未选择文档</p>
+            <p class="empty-copy">上传或选择 PDF 开始阅读。</p>
+          </div>
+
+          <div class="viewer-loading" id="viewer-loading" hidden>
+            <span class="spinner" aria-hidden="true"></span>
+            <span>正在加载 PDF…</span>
+          </div>
+
+          <div class="viewer-error" id="viewer-error" hidden>
+            <p class="error-title">PDF 加载失败</p>
+            <p class="error-copy" id="viewer-error-message"></p>
+          </div>
+
+          <div class="page-shell" id="page-shell" hidden>
+            <canvas id="pdf-canvas"></canvas>
+            <div
+              class="highlight-layer"
+              id="highlight-layer"
+              aria-hidden="true"
+            ></div>
+          </div>
+        </div>
       </main>
+
+      <aside class="inspector-pane" id="inspector-pane" aria-label="证据问答">
+        <header class="inspector-header">
+          <div class="inspector-heading">
+            <h2>问答</h2>
+          </div>
+          <button
+            class="icon-button drawer-close"
+            id="inspector-close"
+            type="button"
+            title="关闭问答"
+            aria-label="关闭问答"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+            >
+              <path d="m6 6 12 12M18 6 6 18" stroke-linecap="round" />
+            </svg>
+          </button>
+        </header>
+
+        <div class="qa-input">
+          <form class="search-form qa-form" id="qa-form">
+            <div class="qa-select-row">
+              <label class="select-field">
+                <span class="field-label">检索方式</span>
+                <select class="qa-mode" id="qa-retrieval-mode">
+                  <option value="literal" selected>关键词</option>
+                  <option value="semantic">语义</option>
+                </select>
+              </label>
+              <label class="select-field">
+                <span class="field-label">回答模式</span>
+                <select class="qa-mode" id="qa-mode">
+                  <option value="evidence_only" selected>证据展示</option>
+                  <option value="grounded_generation">AI 生成</option>
+                </select>
+              </label>
+            </div>
+            <textarea
+              id="qa-question"
+              rows="3"
+              placeholder="输入问题…"
+              spellcheck="false"
+            ></textarea>
+            <input
+              class="qa-query"
+              id="qa-query"
+              type="text"
+              placeholder="检索词（可选）"
+              spellcheck="false"
+            />
+            <div class="qa-controls">
+              <button
+                class="primary-button"
+                id="qa-submit"
+                type="submit"
+                disabled
+              >
+                提问
+              </button>
+            </div>
+          </form>
+          <p class="search-hint" id="qa-hint"></p>
+        </div>
+
+        <div class="qa-output">
+          <div class="qa-empty" id="qa-empty">暂无回答</div>
+          <section class="qa-summary" id="qa-summary" hidden>
+            <div class="qa-summary-head">
+              <h3 id="qa-summary-title">检索结果</h3>
+              <span class="qa-summary-count" id="qa-summary-count"></span>
+            </div>
+            <p class="qa-summary-note" id="qa-summary-note"></p>
+            <details class="qa-answer-details" id="qa-answer-details" hidden>
+              <summary>检索说明</summary>
+              <p id="qa-answer-details-text"></p>
+            </details>
+          </section>
+          <div class="qa-answer" id="qa-answer" hidden aria-live="polite">
+            <p class="qa-answer-text" id="qa-answer-text"></p>
+          </div>
+          <div class="qa-citations" id="qa-citations"></div>
+        </div>
+      </aside>
     </div>
+
+    <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
 
     <div
       class="toast-region"
       id="toast-region"
-      aria-live="polite"
       aria-atomic="false"
     ></div>
     <script type="module" src="/src/main.ts"></script>

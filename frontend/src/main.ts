@@ -2,9 +2,11 @@ import { ApiError, RagAnchorApi } from "./api/client";
 import type {
   AnchorHit,
   AnswerMode,
+  CitationSupportKind,
   DocumentIndexResponse,
   DocumentSummary,
   EvidenceCitation,
+  QuestionAnswerResponse,
   RetrievalHit,
   RetrievalMode,
   SemanticIndexResponse,
@@ -32,9 +34,7 @@ import {
   toCitationEvidenceSpan,
 } from "./qa/citation";
 import {
-  answerModeLabel,
   generationFailureMessage,
-  retrievalModeLabel,
   semanticFailureMessage,
   semanticIndexFailureMessage,
 } from "./qa/mode";
@@ -70,6 +70,15 @@ function byId<T extends HTMLElement>(id: string): T {
 const connectionStatus = byId<HTMLDivElement>("connection-status");
 const connectionLabel = byId<HTMLSpanElement>("connection-label");
 
+const libraryPane = byId<HTMLElement>("library-pane");
+const libraryToggle = byId<HTMLButtonElement>("library-toggle");
+const libraryClose = byId<HTMLButtonElement>("library-close");
+const inspectorPane = byId<HTMLElement>("inspector-pane");
+const inspectorToggle = byId<HTMLButtonElement>("inspector-toggle");
+const inspectorClose = byId<HTMLButtonElement>("inspector-close");
+const drawerBackdrop = byId<HTMLDivElement>("drawer-backdrop");
+const narrowLayout = window.matchMedia("(max-width: 1024px)");
+
 const uploadZone = byId<HTMLLabelElement>("upload-zone");
 const uploadInput = byId<HTMLInputElement>("upload-input");
 const uploadStatus = byId<HTMLParagraphElement>("upload-status");
@@ -93,13 +102,18 @@ const chunkResults = byId<HTMLDivElement>("chunk-results");
 const qaForm = byId<HTMLFormElement>("qa-form");
 const qaRetrievalMode = byId<HTMLSelectElement>("qa-retrieval-mode");
 const qaMode = byId<HTMLSelectElement>("qa-mode");
-const qaModeNote = byId<HTMLSpanElement>("qa-mode-note");
 const qaQuestion = byId<HTMLTextAreaElement>("qa-question");
 const qaQuery = byId<HTMLInputElement>("qa-query");
 const qaSubmit = byId<HTMLButtonElement>("qa-submit");
 const qaHint = byId<HTMLParagraphElement>("qa-hint");
+const qaEmpty = byId<HTMLDivElement>("qa-empty");
+const qaSummary = byId<HTMLElement>("qa-summary");
+const qaSummaryTitle = byId<HTMLHeadingElement>("qa-summary-title");
+const qaSummaryCount = byId<HTMLSpanElement>("qa-summary-count");
+const qaSummaryNote = byId<HTMLParagraphElement>("qa-summary-note");
+const qaAnswerDetails = byId<HTMLDetailsElement>("qa-answer-details");
+const qaAnswerDetailsText = byId<HTMLParagraphElement>("qa-answer-details-text");
 const qaAnswer = byId<HTMLDivElement>("qa-answer");
-const qaAnswerMode = byId<HTMLParagraphElement>("qa-answer-mode");
 const qaAnswerText = byId<HTMLParagraphElement>("qa-answer-text");
 const qaCitations = byId<HTMLDivElement>("qa-citations");
 const semanticIndexButton = byId<HTMLButtonElement>("semantic-index-button");
@@ -110,6 +124,7 @@ const searchInput = byId<HTMLTextAreaElement>("search-input");
 const matchCase = byId<HTMLInputElement>("match-case");
 const searchButton = byId<HTMLButtonElement>("search-button");
 const searchHint = byId<HTMLParagraphElement>("search-hint");
+const searchResultsPanel = byId<HTMLElement>("search-results");
 
 const resultCount = byId<HTMLSpanElement>("result-count");
 const hitPosition = byId<HTMLSpanElement>("hit-position");
@@ -233,20 +248,6 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatDate(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return iso;
-  }
-  return date.toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 function snippet(text: string, maxLength = 150): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   return normalized.length > maxLength
@@ -279,24 +280,150 @@ function friendlyError(error: unknown): string {
   return "发生未知错误，请稍后重试。";
 }
 
+const TOAST_LIMIT = 3;
+const toastTimers = new WeakMap<HTMLElement, number>();
+
+function dismissToast(toast: HTMLElement): void {
+  const timer = toastTimers.get(toast);
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    toastTimers.delete(toast);
+  }
+  if (toast.classList.contains("is-leaving")) {
+    return;
+  }
+  toast.classList.add("is-leaving");
+  window.setTimeout(() => toast.remove(), 180);
+}
+
+function armToastTimer(toast: HTMLElement, duration: number): void {
+  const previous = toastTimers.get(toast);
+  if (previous !== undefined) {
+    window.clearTimeout(previous);
+  }
+  const timer = window.setTimeout(() => {
+    toastTimers.delete(toast);
+    dismissToast(toast);
+  }, duration);
+  toastTimers.set(toast, timer);
+}
+
 function showToast(
   message: string,
   kind: "info" | "success" | "error" = "info"
 ): void {
+  const toastKey = `${kind}:${message}`;
+  const existing = Array.from(toastRegion.children).find(
+    (node) =>
+      node instanceof HTMLElement &&
+      node.dataset.toastKey === toastKey &&
+      !node.classList.contains("is-leaving")
+  ) as HTMLElement | undefined;
+  if (existing) {
+    if (kind !== "error") {
+      armToastTimer(existing, kind === "success" ? 3000 : 3200);
+    }
+    return;
+  }
+
+  while (toastRegion.childElementCount >= TOAST_LIMIT) {
+    const children = Array.from(toastRegion.children) as HTMLElement[];
+    // Keep failures visible; only evict a remaining error when every toast is
+    // an error, which still bounds the stack.
+    const victim =
+      children.find((node) => node.dataset.toastKind !== "error") ?? children[0];
+    const timer = toastTimers.get(victim);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      toastTimers.delete(victim);
+    }
+    victim.remove();
+  }
+
   const toast = document.createElement("div");
   toast.className = `toast toast--${kind}`;
-  toast.textContent = message;
+  toast.dataset.toastKey = toastKey;
+  toast.dataset.toastKind = kind;
+  toast.setAttribute("role", kind === "error" ? "alert" : "status");
+  toast.setAttribute("aria-atomic", "true");
+
+  const text = document.createElement("span");
+  text.className = "toast-text";
+  text.textContent = message;
+  toast.append(text);
+
+  if (kind === "error") {
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "toast-close";
+    close.setAttribute("aria-label", "关闭通知");
+    close.textContent = "×";
+    close.addEventListener("click", () => dismissToast(toast));
+    toast.append(close);
+  } else {
+    armToastTimer(toast, kind === "success" ? 3000 : 3200);
+  }
+
   toastRegion.append(toast);
-  window.setTimeout(() => {
-    toast.classList.add("is-leaving");
-    window.setTimeout(() => toast.remove(), 200);
-  }, 4200);
 }
 
 function setConnection(state: "idle" | "ok" | "error", label: string): void {
   connectionStatus.dataset.state = state;
   connectionLabel.textContent = label;
 }
+
+/* ---------- Drawer panes ---------- */
+
+function setDrawerOpen(
+  pane: HTMLElement,
+  toggle: HTMLButtonElement,
+  open: boolean
+): void {
+  pane.classList.toggle("is-open", open);
+  toggle.setAttribute("aria-expanded", String(open));
+}
+
+function closeDrawers(): void {
+  setDrawerOpen(libraryPane, libraryToggle, false);
+  setDrawerOpen(inspectorPane, inspectorToggle, false);
+  drawerBackdrop.hidden = true;
+}
+
+function toggleDrawer(
+  pane: HTMLElement,
+  toggle: HTMLButtonElement,
+  otherPane: HTMLElement,
+  otherToggle: HTMLButtonElement
+): void {
+  const open = !pane.classList.contains("is-open");
+  setDrawerOpen(otherPane, otherToggle, false);
+  setDrawerOpen(pane, toggle, open);
+  drawerBackdrop.hidden = !open;
+}
+
+function toggleLibraryDrawer(): void {
+  toggleDrawer(libraryPane, libraryToggle, inspectorPane, inspectorToggle);
+}
+
+function toggleInspectorDrawer(): void {
+  toggleDrawer(inspectorPane, inspectorToggle, libraryPane, libraryToggle);
+}
+
+libraryToggle.addEventListener("click", toggleLibraryDrawer);
+libraryClose.addEventListener("click", closeDrawers);
+inspectorToggle.addEventListener("click", toggleInspectorDrawer);
+inspectorClose.addEventListener("click", closeDrawers);
+drawerBackdrop.addEventListener("click", closeDrawers);
+narrowLayout.addEventListener("change", (event) => {
+  if (!event.matches) {
+    closeDrawers();
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeDrawers();
+  }
+});
 
 /* ---------- Viewer integration ---------- */
 
@@ -357,7 +484,7 @@ function renderDocuments(): void {
   if (documents.length === 0) {
     const empty = document.createElement("div");
     empty.className = "list-empty";
-    empty.textContent = "还没有文档。上传一个 PDF 开始探索。";
+    empty.textContent = "暂无文献";
     documentList.append(empty);
     return;
   }
@@ -389,11 +516,7 @@ function renderDocuments(): void {
       item.size_bytes
     )}`;
 
-    const date = document.createElement("p");
-    date.className = "document-date";
-    date.textContent = formatDate(item.created_at);
-
-    body.append(name, meta, date);
+    body.append(name, meta);
 
     const removeButton = document.createElement("button");
     removeButton.type = "button";
@@ -471,6 +594,9 @@ async function selectDocument(documentId: string): Promise<void> {
   const token = ++selectionToken;
   selectedId = documentId;
   renderDocuments();
+  if (narrowLayout.matches) {
+    closeDrawers();
+  }
   resetSearchResults();
   resetChunkState();
   resetIndexState();
@@ -478,9 +604,10 @@ async function selectDocument(documentId: string): Promise<void> {
   updateSearchAvailability();
 
   viewerTitle.textContent = document.filename;
+  viewerTitle.title = document.filename;
   viewerSubtitle.textContent = `${document.page_count} 页 · ${formatBytes(
     document.size_bytes
-  )} · ${formatDate(document.created_at)}`;
+  )}`;
   viewerEmpty.hidden = true;
   viewerError.hidden = true;
   viewerLoading.hidden = false;
@@ -495,9 +622,10 @@ async function selectDocument(documentId: string): Promise<void> {
     }
 
     viewerTitle.textContent = detail.filename;
+    viewerTitle.title = detail.filename;
     viewerSubtitle.textContent = `${detail.page_count} 页 · ${formatBytes(
       detail.size_bytes
-    )} · ${formatDate(detail.created_at)}`;
+    )}`;
 
     const buffer = await api.getDocumentFile(documentId);
     if (token !== selectionToken) {
@@ -534,7 +662,8 @@ async function clearSelection(): Promise<void> {
   renderDocuments();
 
   viewerTitle.textContent = "未选择文档";
-  viewerSubtitle.textContent = "从左侧文档库选择一个 PDF 开始";
+  viewerTitle.title = "未选择文档";
+  viewerSubtitle.textContent = "";
   viewerLoading.hidden = true;
   viewerError.hidden = true;
   viewerEmpty.hidden = false;
@@ -652,10 +781,10 @@ function updateSearchAvailability(): void {
 
   if (!document) {
     searchHint.className = "search-hint";
-    searchHint.textContent = "请先选择一个文档。";
+    searchHint.textContent = "请先选择文献。";
   } else if (!hasSearched && !searchInFlight) {
     searchHint.className = "search-hint";
-    searchHint.textContent = `将在「${document.filename}」中检索。`;
+    searchHint.textContent = "";
   }
 
   updateSearchButton();
@@ -699,9 +828,7 @@ function resetChunkState(): void {
   chunkSearchInFlight = false;
   chunkPosition.textContent = "0 / 0";
   chunkHint.className = "search-hint";
-  chunkHint.textContent = selectedId
-    ? "尚未建立索引，先建立索引后再检索。"
-    : "请先选择一个文档。";
+  chunkHint.textContent = selectedId ? "请先建立索引。" : "请先选择文献。";
   chunkPrev.disabled = true;
   chunkNext.disabled = true;
   chunkSearchButton.disabled = true;
@@ -727,38 +854,75 @@ function semanticIndexReady(): boolean {
   );
 }
 
-function updateQaModeNote(): void {
-  const retrieval = currentRetrievalMode();
-  const semantic = retrieval === "semantic";
-  if (currentQaMode() === "grounded_generation") {
-    qaModeNote.textContent = semantic
-      ? "语义召回候选后调用模型；引用由服务端校验，结论需人工核对"
-      : "调用已配置的模型；引用由服务端校验，结论需人工核对";
-    return;
-  }
-  qaModeNote.textContent = semantic
-    ? "语义检索只返回相关性排序的候选证据，不生成结论"
-    : "不调用语言模型，仅返回字面匹配的原文证据";
-}
-
 function qaIdleHint(): string {
   if (!selectedId) {
-    return "请先选择一个文档。";
+    return "请先选择文献。";
   }
   if (indexedDocumentId !== selectedId) {
-    return "请先建立索引后再提问。";
+    return "请先建立索引。";
   }
   if (currentRetrievalMode() === "semantic" && !semanticIndexReady()) {
-    return "语义检索需要先建立语义索引。";
+    return "请先建立语义索引。";
   }
-  if (currentRetrievalMode() === "semantic") {
-    return currentQaMode() === "grounded_generation"
-      ? "已建立语义索引。模型只接收排序后的候选证据，引用由服务端校验。"
-      : "已建立语义索引，可以提问。语义排序不代表事实支持，请核对原文。";
+  return "";
+}
+
+function uniformCitationSupport(
+  citations: EvidenceCitation[]
+): CitationSupportKind | null {
+  if (citations.length === 0) {
+    return null;
   }
-  return currentQaMode() === "grounded_generation"
-    ? "已建立索引。AI 生成会调用已配置的模型服务；引用由服务端校验。"
-    : "已建立索引，可以提问。仅展示原文证据，不生成结论。";
+  const first = citationSupportSpan(citations[0]).kind;
+  return citations.every(
+    (citation) => citationSupportSpan(citation).kind === first
+  )
+    ? first
+    : null;
+}
+
+function resetQaOutput(): void {
+  qaSummary.hidden = true;
+  qaSummaryTitle.textContent = "检索结果";
+  qaSummaryCount.textContent = "";
+  qaSummaryNote.textContent = "";
+  qaAnswerDetails.hidden = true;
+  qaAnswerDetails.open = false;
+  qaAnswerDetailsText.textContent = "";
+  qaAnswer.hidden = true;
+  qaAnswerText.textContent = "";
+  qaCitations.replaceChildren();
+}
+
+function renderQaSummary(
+  response: QuestionAnswerResponse,
+  mode: AnswerMode
+): void {
+  const uniform = uniformCitationSupport(response.citations);
+  const supportSuffix = uniform
+    ? ` · 均为${citationSupportLabel(uniform)}`
+    : "";
+  const matchCount =
+    response.retrieval_mode === "semantic"
+      ? `${response.total_matches} 条候选`
+      : `${response.total_matches} 处匹配`;
+
+  qaSummaryTitle.textContent =
+    mode === "grounded_generation" ? "AI 生成回答" : "检索结果";
+  qaSummaryCount.textContent =
+    mode === "grounded_generation"
+      ? `${matchCount} · ${response.citations.length} 条引用`
+      : `${matchCount} · ${response.citations.length} 条证据`;
+  qaSummaryNote.textContent =
+    mode === "grounded_generation"
+      ? `引用编号由服务端校验，结论仍需人工核对原文${supportSuffix}`
+      : `仅展示原文证据，未调用语言模型${supportSuffix}`;
+  qaSummary.hidden = false;
+
+  if (mode === "evidence_only" && response.answer.trim()) {
+    qaAnswerDetailsText.textContent = response.answer;
+    qaAnswerDetails.hidden = false;
+  }
 }
 
 function resetQaState(): void {
@@ -768,12 +932,8 @@ function resetQaState(): void {
   qaActiveIndex = -1;
   clearHighlight("qa");
   qaInFlight = false;
-  qaAnswer.hidden = true;
-  qaAnswerMode.textContent = `${retrievalModeLabel(
-    currentRetrievalMode()
-  )} · ${answerModeLabel(currentQaMode())}`;
-  qaAnswerText.textContent = "";
-  qaCitations.replaceChildren();
+  resetQaOutput();
+  qaEmpty.hidden = false;
   qaHint.className = "search-hint";
   qaHint.textContent = qaIdleHint();
   updateQaAvailability();
@@ -807,19 +967,22 @@ function updateSemanticAvailability(): void {
   if (!document) {
     semanticIndexButton.disabled = true;
     semanticIndexButton.textContent = "建立语义索引";
-    semanticIndexDetail.textContent = "选择一个文档后可建立语义索引。";
+    semanticIndexDetail.textContent = "请先选择文献";
+    semanticIndexDetail.title = "请先选择文献";
     return;
   }
   if (semanticIndexInFlight) {
     semanticIndexButton.disabled = true;
     semanticIndexButton.textContent = "语义索引建立中…";
-    semanticIndexDetail.textContent = "正在调用 Embedding 服务并保存候选向量。";
+    semanticIndexDetail.textContent = "正在建立语义索引…";
+    semanticIndexDetail.title = "";
     return;
   }
   if (indexInFlight) {
     semanticIndexButton.disabled = true;
     semanticIndexButton.textContent = "建立语义索引";
-    semanticIndexDetail.textContent = "请等待文本索引建立完成。";
+    semanticIndexDetail.textContent = "等待文本索引完成";
+    semanticIndexDetail.title = "";
     return;
   }
   if (qaInFlight) {
@@ -827,13 +990,15 @@ function updateSemanticAvailability(): void {
       semanticIndexedDocumentId === document.document_id && semanticIndexStats;
     semanticIndexButton.disabled = true;
     semanticIndexButton.textContent = built ? "重建语义索引" : "建立语义索引";
-    semanticIndexDetail.textContent = "请等待当前问答完成后再重建语义索引。";
+    semanticIndexDetail.textContent = "等待问答完成";
+    semanticIndexDetail.title = "";
     return;
   }
   if (indexedDocumentId !== document.document_id) {
     semanticIndexButton.disabled = true;
     semanticIndexButton.textContent = "建立语义索引";
-    semanticIndexDetail.textContent = "请先建立文本索引，再建立语义索引。";
+    semanticIndexDetail.textContent = "需先建立文本索引";
+    semanticIndexDetail.title = "";
     return;
   }
   if (
@@ -842,13 +1007,14 @@ function updateSemanticAvailability(): void {
   ) {
     semanticIndexButton.disabled = false;
     semanticIndexButton.textContent = "重建语义索引";
-    semanticIndexDetail.textContent = `已建立语义索引：${semanticIndexStats.candidate_count} 个候选 · ${semanticIndexStats.model_name}/${semanticIndexStats.model_version} · ${semanticIndexStats.dimension} 维。`;
+    semanticIndexDetail.textContent = `已建立 · ${semanticIndexStats.candidate_count} 候选 · ${semanticIndexStats.dimension} 维`;
+    semanticIndexDetail.title = `${semanticIndexStats.model_name}/${semanticIndexStats.model_version} · ${semanticIndexStats.dimension} 维 · ${semanticIndexStats.candidate_count} 个候选`;
     return;
   }
   semanticIndexButton.disabled = false;
   semanticIndexButton.textContent = "建立语义索引";
-  semanticIndexDetail.textContent =
-    "语义检索需要单独建立向量索引（会调用 Embedding 服务）。";
+  semanticIndexDetail.textContent = "";
+  semanticIndexDetail.title = "将调用 Embedding 服务生成语义索引";
 }
 
 function resetSemanticIndexState(): void {
@@ -864,24 +1030,28 @@ function updateIndexAvailability(): void {
   if (!document) {
     indexButton.disabled = true;
     indexButton.textContent = "建立索引";
-    indexDetail.textContent = "选择一个文档后可建立索引。";
+    indexDetail.textContent = "请先选择文献";
+    indexDetail.title = "请先选择文献";
     return;
   }
   if (indexInFlight) {
     indexButton.disabled = true;
     indexButton.textContent = "索引中…";
-    indexDetail.textContent = "正在建立索引，请稍候。";
+    indexDetail.textContent = "正在建立索引…";
+    indexDetail.title = "";
     return;
   }
   if (indexedDocumentId === document.document_id && indexStats) {
     indexButton.disabled = false;
     indexButton.textContent = "重新索引";
-    indexDetail.textContent = `已索引 ${indexStats.page_count} 页 · ${indexStats.chunk_count} 个 Chunk。`;
+    indexDetail.textContent = `${indexStats.page_count} 页 · ${indexStats.chunk_count} Chunk`;
+    indexDetail.title = `已索引 ${indexStats.page_count} 页 · ${indexStats.chunk_count} 个 Chunk`;
     return;
   }
   indexButton.disabled = false;
   indexButton.textContent = "建立索引";
-  indexDetail.textContent = "建立索引后可进行 Chunk 字面检索。";
+  indexDetail.textContent = "";
+  indexDetail.title = "";
 }
 
 function updateChunkAvailability(): void {
@@ -917,7 +1087,7 @@ async function performIndex(): Promise<void> {
     qaHint.className = "search-hint";
     qaHint.textContent = qaIdleHint();
     showToast(
-      `已建立索引：${stats.page_count} 页 · ${stats.chunk_count} 个 Chunk。`,
+      `已索引 ${stats.page_count} 页 · ${stats.chunk_count} Chunk`,
       "success"
     );
   } catch (error) {
@@ -958,7 +1128,7 @@ async function performSemanticIndex(): Promise<void> {
   updateSemanticAvailability();
   updateQaAvailability();
   qaHint.className = "search-hint is-info";
-  qaHint.textContent = "正在建立语义索引（会调用 Embedding 服务）…";
+  qaHint.textContent = "正在建立语义索引…";
 
   try {
     const stats = await api.buildSemanticIndex(documentId);
@@ -972,7 +1142,7 @@ async function performSemanticIndex(): Promise<void> {
     semanticIndexedDocumentId = documentId;
     semanticIndexStats = stats;
     showToast(
-      `已建立语义索引：${stats.candidate_count} 个候选 · ${stats.dimension} 维。`,
+      `已建立语义索引 · ${stats.candidate_count} 候选`,
       "success"
     );
     qaHint.className = "search-hint";
@@ -1080,6 +1250,9 @@ async function locateChunkHit(index: number): Promise<void> {
 
     const scrollToken = scrollGate.begin();
     await centerActiveHighlight(scrollToken);
+    if (narrowLayout.matches) {
+      closeDrawers();
+    }
   } catch (error) {
     if (!locateGate.isCurrent(requestToken)) {
       return;
@@ -1139,9 +1312,7 @@ async function runChunkSearch(offset: number): Promise<void> {
     chunkActiveIndex = chunkHits.length > 0 ? 0 : -1;
     renderChunkResults();
     chunkHint.className = "search-hint is-info";
-    chunkHint.textContent = `找到 ${
-      response.total
-    } 个匹配的 Chunk，共 ${Math.ceil(response.total / CHUNK_PAGE_SIZE)} 页。`;
+    chunkHint.textContent = `找到 ${response.total} 个 Chunk。`;
   } catch (error) {
     if (!chunkGate.isCurrent(token)) {
       return;
@@ -1176,6 +1347,7 @@ function goChunkPage(offset: number): void {
 
 function renderQaCitations(): void {
   qaCitations.replaceChildren();
+  const uniform = uniformCitationSupport(qaCitationItems);
 
   qaCitationItems.forEach((citation, index) => {
     const support = citationSupportSpan(citation);
@@ -1188,52 +1360,58 @@ function renderQaCitations(): void {
       "aria-current",
       index === qaActiveIndex ? "true" : "false"
     );
+    button.title = citationLabel(citation);
     button.setAttribute(
       "aria-label",
       `${citationLabel(citation)}：${snippet(support.text, 80)}`
     );
 
-    const topLine = document.createElement("span");
-    topLine.className = "result-topline";
+    const meta = document.createElement("span");
+    meta.className = "citation-meta";
 
-    const citationPill = document.createElement("span");
-    citationPill.className = "citation-pill";
-    citationPill.textContent = citation.citation_id;
+    const citationId = document.createElement("span");
+    citationId.className = "citation-id";
+    citationId.textContent = citation.citation_id;
 
-    const pagePill = document.createElement("span");
-    pagePill.className = "page-pill";
-    pagePill.textContent = `第 ${citation.page_number} 页`;
+    const separator = document.createElement("span");
+    separator.className = "citation-separator";
+    separator.textContent = "·";
+    separator.setAttribute("aria-hidden", "true");
 
-    const supportPill = document.createElement("span");
-    supportPill.className = `support-pill support-pill--${support.kind}`;
-    supportPill.textContent = citationSupportLabel(support.kind);
+    const page = document.createElement("span");
+    page.className = "citation-page";
+    page.textContent = `第 ${citation.page_number} 页`;
 
-    topLine.append(citationPill, pagePill, supportPill);
+    meta.append(citationId, separator, page);
+
+    if (uniform === null) {
+      const supportPill = document.createElement("span");
+      supportPill.className = `support-pill support-pill--${support.kind}`;
+      supportPill.textContent = citationSupportLabel(support.kind);
+      meta.append(supportPill);
+    }
     if (
       support.kind === "semantic_candidate" &&
       typeof citation.score === "number"
     ) {
-      const scorePill = document.createElement("span");
-      scorePill.className = "support-pill support-pill--semantic_candidate";
-      scorePill.textContent = `相似度 ${citation.score.toFixed(3)}`;
-      topLine.append(scorePill);
+      const score = document.createElement("span");
+      score.className = "citation-score";
+      score.textContent = `相似度 ${citation.score.toFixed(3)}`;
+      meta.append(score);
     }
 
-    const charRange = document.createElement("span");
-    charRange.className = "result-char";
-    charRange.textContent = `字符 ${support.start}–${support.end}`;
-
-    topLine.append(charRange);
-
-    const text = document.createElement("p");
-    text.className = "result-text";
-    text.textContent = snippet(support.text, 180);
+    const hit = document.createElement("p");
+    hit.className = "citation-hit";
+    hit.textContent = snippet(citation.hit_text, 180);
 
     const context = document.createElement("p");
-    context.className = "qa-citation-context";
+    context.className = "citation-context";
     context.textContent = snippet(citation.chunk_text, 220);
+    if (citation.chunk_text.length > 220) {
+      context.title = citation.chunk_text;
+    }
 
-    button.append(topLine, text, context);
+    button.append(meta, hit, context);
     button.addEventListener("click", () => {
       void locateQaCitation(index);
     });
@@ -1250,7 +1428,7 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
   }
   if (indexedDocumentId !== documentId) {
     qaHint.className = "search-hint is-error";
-    qaHint.textContent = "请先建立索引后再提问。";
+    qaHint.textContent = "请先建立索引。";
     return;
   }
 
@@ -1267,7 +1445,7 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
   const retrievalMode = currentRetrievalMode();
   if (retrievalMode === "semantic" && !semanticIndexReady()) {
     qaHint.className = "search-hint is-error";
-    qaHint.textContent = "请先建立语义索引后再使用语义检索。";
+    qaHint.textContent = "请先建立语义索引。";
     return;
   }
   const token = qaGate.begin();
@@ -1283,19 +1461,15 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
   qaInFlight = true;
   qaCitationItems = [];
   qaActiveIndex = -1;
-  qaAnswer.hidden = true;
-  qaAnswerMode.textContent = `${retrievalModeLabel(
-    retrievalMode
-  )} · ${answerModeLabel(mode)}`;
-  qaAnswerText.textContent = "";
-  qaCitations.replaceChildren();
+  resetQaOutput();
+  qaEmpty.hidden = true;
   qaHint.className = "search-hint is-info";
   if (mode === "grounded_generation") {
-    qaHint.textContent = "正在生成回答（引用将由服务端校验）…";
+    qaHint.textContent = "正在生成回答…";
   } else if (retrievalMode === "semantic") {
-    qaHint.textContent = "正在按语义相似度检索候选证据…";
+    qaHint.textContent = "正在检索语义候选…";
   } else {
-    qaHint.textContent = "正在检索原文证据…";
+    qaHint.textContent = "正在检索证据…";
   }
   updateQaAvailability();
 
@@ -1320,8 +1494,12 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
     qaInFlight = false;
     qaCitationItems = response.citations;
     qaActiveIndex = -1;
-    qaAnswerText.textContent = response.answer;
-    qaAnswer.hidden = false;
+    resetQaOutput();
+    renderQaSummary(response, mode);
+    if (mode === "grounded_generation" && response.answer.trim()) {
+      qaAnswerText.textContent = response.answer;
+      qaAnswer.hidden = false;
+    }
     renderQaCitations();
 
     if (response.status === "insufficient_evidence") {
@@ -1331,18 +1509,9 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
         retrievalMode,
         mode
       );
-    } else if (mode === "grounded_generation") {
-      qaHint.className = "search-hint is-info";
-      qaHint.textContent =
-        retrievalMode === "semantic"
-          ? `AI 生成完成（语义检索）：检索到 ${response.total_matches} 条候选证据，引用 ${response.citations.length} 条。引用编号已校验，语义排序不代表事实支持，结论请核对原文。`
-          : `AI 生成完成：按字面「${response.retrieval_query}」检索到 ${response.total_matches} 条证据，引用 ${response.citations.length} 条。引用编号已校验，结论请核对原文。`;
     } else {
-      qaHint.className = "search-hint is-info";
-      qaHint.textContent =
-        retrievalMode === "semantic"
-          ? `按语义检索找到 ${response.total_matches} 条候选证据，返回 ${response.citations.length} 条引用。语义排序不代表事实支持，请核对原文。`
-          : `按字面「${response.retrieval_query}」找到 ${response.total_matches} 条证据，返回 ${response.citations.length} 条引用。`;
+      qaHint.className = "search-hint";
+      qaHint.textContent = "";
     }
   } catch (error) {
     if (!responseIsCurrent()) {
@@ -1351,9 +1520,8 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
     qaInFlight = false;
     qaCitationItems = [];
     qaActiveIndex = -1;
-    qaAnswer.hidden = true;
-    qaAnswerText.textContent = "";
-    renderQaCitations();
+    resetQaOutput();
+    qaEmpty.hidden = false;
     const status = error instanceof ApiError ? error.status : 0;
     const fallback = friendlyError(error);
     const message =
@@ -1423,6 +1591,9 @@ async function locateQaCitation(index: number): Promise<void> {
     if (activeItem) {
       revealWithin(qaCitations, activeItem);
     }
+    if (narrowLayout.matches) {
+      closeDrawers();
+    }
   } catch (error) {
     if (!locateGate.isCurrent(requestToken) || selectedId !== documentId) {
       return;
@@ -1443,6 +1614,7 @@ async function locateQaCitation(index: number): Promise<void> {
 
 function renderResults(): void {
   resultsList.replaceChildren();
+  searchResultsPanel.classList.toggle("is-visible", searching || hasSearched);
   resultCount.textContent = String(hits.length);
   hitPosition.textContent =
     activeHitIndex >= 0 && hits.length > 0
@@ -1455,12 +1627,11 @@ function renderResults(): void {
     const empty = document.createElement("div");
     empty.className = "list-empty";
     if (searching) {
-      empty.textContent = "正在检索 PDF 原文…";
+      empty.textContent = "正在检索…";
     } else if (hasSearched) {
-      empty.textContent =
-        "没有找到匹配证据。试试更短的片段，或关闭「区分大小写」。";
+      empty.textContent = "没有找到匹配证据。";
     } else {
-      empty.textContent = "搜索后，命中的证据会按页码列在这里。";
+      empty.textContent = "暂无结果";
     }
     resultsList.append(empty);
     return;
@@ -1569,7 +1740,7 @@ async function performSearch(event: SubmitEvent): Promise<void> {
   const query = searchInput.value.trim();
   if (!query) {
     searchHint.className = "search-hint is-error";
-    searchHint.textContent = "请输入要定位的证据文字。";
+    searchHint.textContent = "请输入检索文字。";
     searchInput.focus();
     return;
   }
@@ -1585,7 +1756,7 @@ async function performSearch(event: SubmitEvent): Promise<void> {
   searchButton.textContent = "搜索中…";
   updateSearchButton();
   searchHint.className = "search-hint is-info";
-  searchHint.textContent = "正在检索 PDF 原文…";
+  searchHint.textContent = "正在检索…";
   renderResults();
 
   try {
@@ -1610,7 +1781,7 @@ async function performSearch(event: SubmitEvent): Promise<void> {
       clearHighlight();
     } else {
       searchHint.className = "search-hint is-info";
-      searchHint.textContent = `找到 ${response.total} 处命中，已定位第 1 处。`;
+      searchHint.textContent = `找到 ${response.total} 处命中。`;
       await activateHit(0);
     }
   } catch (error) {
@@ -1743,14 +1914,12 @@ qaQuestion.addEventListener("input", () => {
 });
 
 qaMode.addEventListener("change", () => {
-  updateQaModeNote();
   // A different mode must not inherit citations or answers from the previous
   // one, and any in-flight request belongs to the old mode.
   resetQaState();
 });
 
 qaRetrievalMode.addEventListener("change", () => {
-  updateQaModeNote();
   resetQaState();
 });
 
@@ -1760,7 +1929,7 @@ window.addEventListener("beforeunload", () => {
   viewer.destroy();
 });
 
-updateQaModeNote();
+resetQaState();
 updateSemanticAvailability();
 documentCount.textContent = "0";
 renderResults();

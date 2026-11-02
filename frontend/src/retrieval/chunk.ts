@@ -58,12 +58,12 @@ export function chunkEmptyMessage(options: {
   hasSearched: boolean;
 }): string {
   if (options.searching) {
-    return "正在检索 Chunk…";
+    return "正在检索…";
   }
   if (options.hasSearched) {
     return "没有找到匹配的 Chunk。";
   }
-  return "检索后，命中的 Chunk 会按页码列在这里。";
+  return "暂无结果";
 }
 
 /**
