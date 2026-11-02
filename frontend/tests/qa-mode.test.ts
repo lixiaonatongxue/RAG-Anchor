@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   EVIDENCE_ANSWER_LABEL,
   GENERATED_ANSWER_LABEL,
+  GROUNDED_CITATION_LIMIT,
   answerModeLabel,
   generationFailureMessage,
+  qaMaxCitations,
   retrievalModeLabel,
   semanticFailureMessage,
   semanticIndexFailureMessage,
@@ -23,6 +25,17 @@ describe("answer mode labels", () => {
     expect(GENERATED_ANSWER_LABEL).toContain("服务端校验");
     expect(GENERATED_ANSWER_LABEL).toContain("人工核对");
     expect(GENERATED_ANSWER_LABEL).not.toContain("已验证结论");
+  });
+});
+
+describe("grounded evidence limit", () => {
+  it("requests twelve citations for grounded generation", () => {
+    expect(GROUNDED_CITATION_LIMIT).toBe(12);
+    expect(qaMaxCitations("grounded_generation")).toBe(12);
+  });
+
+  it("keeps evidence-only on the existing client default", () => {
+    expect(qaMaxCitations("evidence_only")).toBeUndefined();
   });
 });
 

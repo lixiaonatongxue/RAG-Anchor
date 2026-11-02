@@ -4,10 +4,21 @@ export const EVIDENCE_ANSWER_LABEL = "证据展示模式 · 未接入语言模�
 export const GENERATED_ANSWER_LABEL =
   "AI 生成回答 · 引用编号由服务端校验，结论仍需人工核对原文";
 
+export const GROUNDED_CITATION_LIMIT = 12;
+
 export function answerModeLabel(mode: AnswerMode): string {
   return mode === "grounded_generation"
     ? GENERATED_ANSWER_LABEL
     : EVIDENCE_ANSWER_LABEL;
+}
+
+/**
+ * Grounded generation requests a wider legacy-ranked evidence set so relevant
+ * passages ranked below the default Top-5 reach the model. Evidence-only keeps
+ * the client's existing default.
+ */
+export function qaMaxCitations(mode: AnswerMode): number | undefined {
+  return mode === "grounded_generation" ? GROUNDED_CITATION_LIMIT : undefined;
 }
 
 export function retrievalModeLabel(mode: RetrievalMode): string {

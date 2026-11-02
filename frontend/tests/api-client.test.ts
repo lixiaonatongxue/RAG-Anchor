@@ -584,6 +584,28 @@ describe("RagAnchorApi.askQuestion", () => {
     });
   });
 
+  it("serializes an explicit twelve-citation limit", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(questionAnswer));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.askQuestion(documentSummary.document_id, {
+      question: "quick",
+      answerMode: "grounded_generation",
+      maxCitations: 12,
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(init?.body))).toEqual({
+      question: "quick",
+      retrieval_mode: "literal",
+      answer_mode: "grounded_generation",
+      match_case: false,
+      max_citations: 12,
+    });
+  });
+
   it("surfaces a 503 when grounded generation is not configured", async () => {
     vi.stubGlobal(
       "fetch",

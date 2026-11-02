@@ -35,6 +35,7 @@ import {
 } from "./qa/citation";
 import {
   generationFailureMessage,
+  qaMaxCitations,
   semanticFailureMessage,
   semanticIndexFailureMessage,
 } from "./qa/mode";
@@ -1479,6 +1480,7 @@ async function performQuestion(event: SubmitEvent): Promise<void> {
       retrievalQuery:
         retrievalMode === "literal" ? retrievalQuery || undefined : undefined,
       retrievalMode,
+      maxCitations: qaMaxCitations(mode),
       answerMode: mode,
     });
     if (!responseIsCurrent()) {
